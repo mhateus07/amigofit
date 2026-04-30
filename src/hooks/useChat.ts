@@ -17,7 +17,6 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
-
     const init = async () => {
       const saved = await storage.getMessages();
       if (saved.length > 0) {
@@ -70,14 +69,14 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
           return;
         }
 
-        setMessages((prev) => {
-          const withUser = prev[prev.length - 1]?.id === userMessage.id ? prev : [...prev, userMessage];
-          return withUser;
-        });
+        // Load current conversation + diary data in parallel
+        const [currentMessages, diaryData] = await Promise.all([
+          storage.getMessages(),
+          storage.getExtractedData(),
+        ]);
 
-        const currentMessages = await storage.getMessages();
         const [aiResponse, extractedData] = await Promise.all([
-          aiServiceRef.current.chat(currentMessages, profile),
+          aiServiceRef.current.chat(currentMessages, profile, diaryData),
           aiServiceRef.current.extractData(text),
         ]);
 
