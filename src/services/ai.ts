@@ -1,8 +1,7 @@
 import { Message, UserProfile, ExtractedData } from '../types';
 import { format, subDays, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-
-const API_BASE = 'http://localhost:3001';
+import { API_BASE } from './storage';
 
 function buildDiaryContext(diaryData: ExtractedData[]): string {
   if (diaryData.length === 0) return '';

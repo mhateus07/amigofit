@@ -1,8 +1,6 @@
-import { storage } from './storage';
+import { storage, API_BASE } from './storage';
 import { AIService } from './ai';
 import { ExtractedData } from '../types';
-
-const API_BASE = 'http://localhost:3001';
 
 async function checkBackend(): Promise<boolean> {
   try {
