@@ -173,7 +173,7 @@ app.get('/api/messages', requireAuth, async (req, res) => {
     'SELECT id, role, content, extracted_data, timestamp FROM messages WHERE user_id=$1 ORDER BY timestamp ASC',
     [req.userId]
   );
-  res.json({ messages: rows.map(r => ({ ...r, extractedData: r.extracted_data })) });
+  res.json({ messages: rows.map(r => ({ ...r, timestamp: Number(r.timestamp), extractedData: r.extracted_data })) });
 });
 
 app.post('/api/messages', requireAuth, async (req, res) => {
@@ -195,7 +195,7 @@ app.get('/api/extracted-data', requireAuth, async (req, res) => {
     'SELECT category, label, value, raw_text as "rawText", timestamp FROM extracted_data WHERE user_id=$1 ORDER BY timestamp DESC',
     [req.userId]
   );
-  res.json({ data: rows });
+  res.json({ data: rows.map(r => ({ ...r, timestamp: Number(r.timestamp) })) });
 });
 
 app.post('/api/extracted-data', requireAuth, async (req, res) => {
