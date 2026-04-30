@@ -19,9 +19,11 @@ import { colors, spacing, radius, fontSize } from '../constants/theme';
 
 interface Props {
   profile: UserProfile | null;
+  authUser: { id: string; name: string; email: string } | null;
   onProfileUpdate: (profile: UserProfile) => void;
   onApiKeySet: (key: string) => Promise<void>;
   hasApiKey: boolean;
+  onLogout: () => void;
 }
 
 const GOALS = [
@@ -37,7 +39,7 @@ const LEVELS = [
   { value: 'advanced', label: 'Avançado' },
 ] as const;
 
-export default function ProfileScreen({ profile, onProfileUpdate, onApiKeySet, hasApiKey }: Props) {
+export default function ProfileScreen({ profile, authUser, onProfileUpdate, onApiKeySet, hasApiKey, onLogout }: Props) {
   const [name, setName] = useState(profile?.name ?? '');
   const [goal, setGoal] = useState<UserProfile['goal']>(profile?.goal ?? 'health');
   const [level, setLevel] = useState<UserProfile['level']>(profile?.level ?? 'beginner');
@@ -73,20 +75,11 @@ export default function ProfileScreen({ profile, onProfileUpdate, onApiKeySet, h
     }
   };
 
-  const handleTestExtraction = async () => {
-    const key = await storage.getApiKey();
-    if (!key) { Alert.alert('Sem chave', 'Configure a API key primeiro.'); return; }
-    try {
-      const res = await fetch('http://localhost:3001/api/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
-        body: JSON.stringify({ message: 'Treino 1:30 de musculação, comi macarronada com farofa e biscoito cheetos, fiquei com azia e tomei bicarbonato de sódio' }),
-      });
-      const text = await res.text();
-      Alert.alert('Resultado da extração', text);
-    } catch (e: any) {
-      Alert.alert('Erro de conexão', e.message);
-    }
+  const handleLogout = () => {
+    Alert.alert('Sair', 'Tem certeza que deseja sair da sua conta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sair', style: 'destructive', onPress: onLogout },
+    ]);
   };
 
   const saveProfile = async () => {
@@ -120,6 +113,23 @@ export default function ProfileScreen({ profile, onProfileUpdate, onApiKeySet, h
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Perfil</Text>
+
+        {authUser && (
+          <View style={styles.section}>
+            <View style={styles.userRow}>
+              <View style={styles.userAvatar}>
+                <Text style={styles.userAvatarText}>{authUser.name.charAt(0).toUpperCase()}</Text>
+              </View>
+              <View style={styles.userInfo}>
+                <Text style={styles.userName}>{authUser.name}</Text>
+                <Text style={styles.userEmail}>{authUser.email}</Text>
+              </View>
+            </View>
+            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+              <Text style={styles.logoutBtnText}>Sair da conta</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Configuração da IA</Text>
@@ -208,10 +218,6 @@ export default function ProfileScreen({ profile, onProfileUpdate, onApiKeySet, h
           <Text style={styles.sectionDesc}>
             Processa todas as mensagens antigas e extrai dados relevantes para o Diário e Insights.
           </Text>
-          <TouchableOpacity style={styles.testBtn} onPress={handleTestExtraction}>
-            <Text style={styles.testBtnText}>Testar extração (diagnóstico)</Text>
-          </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.reprocessBtn, reprocessing && styles.reprocessBtnDisabled]}
             onPress={handleReprocess}
@@ -315,6 +321,22 @@ const styles = StyleSheet.create({
   reprocessBtnDisabled: { borderColor: colors.border, opacity: 0.6 },
   reprocessBtnText: { color: colors.primary, fontSize: fontSize.md, fontWeight: '600' },
   reprocessRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  testBtn: { backgroundColor: colors.surfaceElevated, borderRadius: radius.md, padding: spacing.sm, alignItems: 'center', marginBottom: spacing.sm, borderWidth: 1, borderColor: colors.border },
-  testBtnText: { color: colors.textSecondary, fontSize: fontSize.sm },
+  userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
+  userAvatar: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  userAvatarText: { color: '#000', fontSize: fontSize.lg, fontWeight: '700' },
+  userInfo: { flex: 1 },
+  userName: { color: colors.text, fontSize: fontSize.md, fontWeight: '700' },
+  userEmail: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
+  logoutBtn: {
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.error,
+  },
+  logoutBtnText: { color: colors.error, fontSize: fontSize.sm, fontWeight: '600' },
 });

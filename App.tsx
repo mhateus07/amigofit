@@ -2,7 +2,7 @@ import React, { useState, useEffect, Component, ReactNode } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text, View } from 'react-native';
+import { Text, View, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -10,8 +10,9 @@ import ChatScreen from './src/screens/ChatScreen';
 import DiaryScreen from './src/screens/DiaryScreen';
 import InsightsScreen from './src/screens/InsightsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import AuthScreen from './src/screens/AuthScreen';
 import { UserProfile } from './src/types';
-import { storage } from './src/services/storage';
+import { storage, getToken, getStoredUser, clearToken } from './src/services/storage';
 import { colors, fontSize } from './src/constants/theme';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -37,20 +38,62 @@ function TabIcon({ icon, focused }: { icon: string; focused: boolean }) {
 }
 
 export default function App() {
+  const [authReady, setAuthReady] = useState(false);
+  const [authUser, setAuthUser] = useState<{ id: string; name: string; email: string } | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([storage.getProfile(), storage.getApiKey()]).then(([p, k]) => {
-      setProfile(p);
-      setApiKey(k);
-    });
+    (async () => {
+      const [token, user] = await Promise.all([getToken(), getStoredUser()]);
+      if (token && user) {
+        setAuthUser(user);
+        const [p, k] = await Promise.all([storage.getProfile(), storage.getApiKey()]);
+        setProfile(p);
+        setApiKey(k);
+      }
+      setAuthReady(true);
+    })();
   }, []);
+
+  const handleAuth = async (user: { id: string; name: string; email: string }, _token: string) => {
+    setAuthUser(user);
+    const [p, k] = await Promise.all([storage.getProfile(), storage.getApiKey()]);
+    setProfile(p);
+    setApiKey(k);
+  };
+
+  const handleLogout = async () => {
+    await clearToken();
+    setAuthUser(null);
+    setProfile(null);
+  };
 
   const handleApiKeySet = async (key: string) => {
     await storage.saveApiKey(key);
     setApiKey(key);
   };
+
+  if (!authReady) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <ErrorBoundary>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaProvider>
+            <StatusBar style="light" />
+            <AuthScreen onAuth={handleAuth} />
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary>
@@ -95,9 +138,11 @@ export default function App() {
                 {() => (
                   <ProfileScreen
                     profile={profile}
+                    authUser={authUser}
                     onProfileUpdate={setProfile}
                     onApiKeySet={handleApiKeySet}
                     hasApiKey={!!apiKey}
+                    onLogout={handleLogout}
                   />
                 )}
               </Tab.Screen>
