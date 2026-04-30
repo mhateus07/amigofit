@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "_amigo_fit_temp",
-    "slug": "_amigo_fit_temp",
+    "name": "AmigoFit",
+    "slug": "amigofit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

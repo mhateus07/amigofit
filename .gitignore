@@ -39,3 +39,11 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# env / secrets
+.env
+.env.local
+server/.env
+
+# Claude memory (local only)
+.claude/
