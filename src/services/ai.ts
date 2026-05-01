@@ -1,7 +1,7 @@
 import { Message, UserProfile, ExtractedData } from '../types';
 import { format, subDays, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { API_BASE } from './storage';
+import { API_BASE, getToken } from './storage';
 
 function buildDiaryContext(diaryData: ExtractedData[]): string {
   if (diaryData.length === 0) return '';
@@ -68,13 +68,16 @@ REGRAS DE COMPORTAMENTO:
 }
 
 export class AIService {
-  private headers: Record<string, string>;
+  constructor(private apiKey: string) {}
 
-  constructor(private apiKey: string) {
-    this.headers = {
+  private async headers(): Promise<Record<string, string>> {
+    const token = await getToken();
+    const h: Record<string, string> = {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
+      'x-api-key': this.apiKey,
     };
+    if (token) h['Authorization'] = `Bearer ${token}`;
+    return h;
   }
 
   async chat(
@@ -91,7 +94,7 @@ export class AIService {
 
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
-      headers: this.headers,
+      headers: await this.headers(),
       body: JSON.stringify({ messages: formatted, systemPrompt }),
     });
 
@@ -107,7 +110,7 @@ export class AIService {
     try {
       const res = await fetch(`${API_BASE}/api/extract`, {
         method: 'POST',
-        headers: this.headers,
+        headers: await this.headers(),
         body: JSON.stringify({ message: userMessage }),
       });
       const data = await res.json();
