@@ -87,6 +87,8 @@ export default function ChatScreen({ profile, apiKey }: Props) {
         renderItem={({ item }) => <MessageBubble message={item} />}
         contentContainerStyle={styles.messageList}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         ListFooterComponent={
           isLoading ? (
             <View style={styles.typingIndicator}>
@@ -117,7 +119,7 @@ export default function ChatScreen({ profile, apiKey }: Props) {
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
       >
         <View style={styles.inputRow}>
           <TextInput
