@@ -9,10 +9,11 @@ import { colors, spacing, radius, fontSize } from '../constants/theme';
 
 interface Props {
   onAuth: (user: { id: string; name: string; email: string }, token: string) => void;
+  initialMode?: 'login' | 'register';
 }
 
-export default function AuthScreen({ onAuth }: Props) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+export default function AuthScreen({ onAuth, initialMode = 'login' }: Props) {
+  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

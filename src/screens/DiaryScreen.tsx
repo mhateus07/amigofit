@@ -157,8 +157,8 @@ export default function DiaryScreen() {
       <FlatList
         data={listData}
         keyExtractor={(item, i) => {
-          if (item.type === 'card') return item.item.timestamp + i;
-          return item.type + i;
+          if (item.type === 'card') return `${item.item.timestamp}_${i}`;
+          return `${item.type}_${i}`;
         }}
         renderItem={({ item }) => {
           if (item.type === 'stats') return <StatsBar data={allData} />;

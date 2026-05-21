@@ -2,7 +2,7 @@ import React, { useState, useEffect, Component, ReactNode } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text, View, ActivityIndicator } from 'react-native';
+import { Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -11,6 +11,9 @@ import DiaryScreen from './src/screens/DiaryScreen';
 import InsightsScreen from './src/screens/InsightsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import AuthScreen from './src/screens/AuthScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
+import SplashScreen from './src/screens/SplashScreen';
+import WelcomeScreen from './src/screens/WelcomeScreen';
 import { UserProfile } from './src/types';
 import { storage, getToken, getStoredUser, clearToken } from './src/services/storage';
 import { colors, fontSize } from './src/constants/theme';
@@ -38,10 +41,13 @@ function TabIcon({ icon, focused }: { icon: string; focused: boolean }) {
 }
 
 export default function App() {
-  const [authReady, setAuthReady] = useState(false);
-  const [authUser, setAuthUser] = useState<{ id: string; name: string; email: string } | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [splashDone, setSplashDone] = useState(false);
+  const [authReady, setAuthReady]   = useState(false);
+  const [authUser, setAuthUser]     = useState<{ id: string; name: string; email: string } | null>(null);
+  const [profile, setProfile]       = useState<UserProfile | null>(null);
+  const [apiKey, setApiKey]         = useState<string | null>(null);
+  const [authMode, setAuthMode]     = useState<'login' | 'register'>('login');
+  const [showAuth, setShowAuth]     = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -63,10 +69,16 @@ export default function App() {
     setApiKey(k);
   };
 
+  const handleOnboardingComplete = (p: UserProfile, key: string) => {
+    setProfile(p);
+    if (key) setApiKey(key);
+  };
+
   const handleLogout = async () => {
     await clearToken();
     setAuthUser(null);
     setProfile(null);
+    setShowAuth(false);
   };
 
   const handleApiKeySet = async (key: string) => {
@@ -74,21 +86,60 @@ export default function App() {
     setApiKey(key);
   };
 
-  if (!authReady) {
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
-    );
-  }
-
-  if (!authUser) {
+  // Splash always shows first
+  if (!splashDone) {
     return (
       <ErrorBoundary>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <SafeAreaProvider>
             <StatusBar style="light" />
-            <AuthScreen onAuth={handleAuth} />
+            <SplashScreen onComplete={() => setSplashDone(true)} />
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </ErrorBoundary>
+    );
+  }
+
+  // Auth check still in progress after splash (rare, splash is 2.6s)
+  if (!authReady) {
+    return <View style={{ flex: 1, backgroundColor: colors.background }} />;
+  }
+
+  if (!authUser) {
+    if (showAuth) {
+      return (
+        <ErrorBoundary>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <SafeAreaProvider>
+              <StatusBar style="light" />
+              <AuthScreen onAuth={handleAuth} initialMode={authMode} />
+            </SafeAreaProvider>
+          </GestureHandlerRootView>
+        </ErrorBoundary>
+      );
+    }
+    return (
+      <ErrorBoundary>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaProvider>
+            <StatusBar style="light" />
+            <WelcomeScreen
+              onLogin={() => { setAuthMode('login'); setShowAuth(true); }}
+              onRegister={() => { setAuthMode('register'); setShowAuth(true); }}
+            />
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </ErrorBoundary>
+    );
+  }
+
+  if (!profile || !profile.onboardingComplete) {
+    return (
+      <ErrorBoundary>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaProvider>
+            <StatusBar style="light" />
+            <OnboardingScreen authUser={authUser} onComplete={handleOnboardingComplete} />
           </SafeAreaProvider>
         </GestureHandlerRootView>
       </ErrorBoundary>

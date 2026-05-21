@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const Anthropic = require('@anthropic-ai/sdk');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
@@ -7,7 +8,11 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'amigofit_secret_change_in_prod';
+
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️  AVISO: JWT_SECRET não definido. Defina a variável de ambiente JWT_SECRET em produção!');
+}
+const JWT_SECRET = process.env.JWT_SECRET || 'amigofit_dev_secret_nao_usar_em_producao';
 
 // ── Database ──────────────────────────────────────────────
 const pool = new Pool({
@@ -53,6 +58,15 @@ async function initDB() {
   console.log('Database ready');
 }
 
+// ── Rate limiting ─────────────────────────────────────────
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Muitas tentativas. Aguarde 15 minutos e tente novamente.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ── Middleware ────────────────────────────────────────────
 app.use(cors({
   origin: '*',
@@ -93,7 +107,7 @@ function getAnthropicClient(req, res) {
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // ── Auth: Register ────────────────────────────────────────
-app.post('/auth/register', async (req, res) => {
+app.post('/auth/register', authLimiter, async (req, res) => {
   const { name, email, password } = req.body;
   if (!name?.trim() || !email?.trim() || !password?.trim()) {
     return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios' });
@@ -121,7 +135,7 @@ app.post('/auth/register', async (req, res) => {
 });
 
 // ── Auth: Login ───────────────────────────────────────────
-app.post('/auth/login', async (req, res) => {
+app.post('/auth/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email?.trim() || !password?.trim()) {
     return res.status(400).json({ error: 'E-mail e senha são obrigatórios' });
