@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import { Message, UserProfile } from '../types';
+
+const uuidv4 = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 import { storage } from '../services/storage';
 import { AIService } from '../services/ai';
 
@@ -36,18 +37,22 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string) => {
-      if (!text.trim() || isLoading) return;
+    async (text: string, imageBase64?: string, imageMimeType?: string, imageUri?: string) => {
+      if (!text.trim() && !imageBase64) return;
+      if (isLoading) return;
 
       const userMessage: Message = {
         id: uuidv4(),
         role: 'user',
-        content: text.trim(),
+        content: text.trim() || '📷 Imagem enviada',
         timestamp: Date.now(),
+        imageUri,
       };
 
+      let conversationForAI: Message[] = [];
       setMessages((prev) => {
         const updated = [...prev, userMessage];
+        conversationForAI = updated;
         storage.saveMessages(updated);
         return updated;
       });
@@ -69,14 +74,10 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
           return;
         }
 
-        // Load current conversation + diary data in parallel
-        const [currentMessages, diaryData] = await Promise.all([
-          storage.getMessages(),
-          storage.getExtractedData(),
-        ]);
+        const diaryData = await storage.getExtractedData();
 
         const [aiResponse, extractedData] = await Promise.all([
-          aiServiceRef.current.chat(currentMessages, profile, diaryData),
+          aiServiceRef.current.chat(conversationForAI, profile, diaryData, imageBase64, imageMimeType),
           aiServiceRef.current.extractData(text),
         ]);
 
@@ -100,12 +101,15 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
       } catch (error) {
         const errText = error instanceof Error ? error.message : String(error);
         const isBilling = errText.includes('credit balance');
+        const isAuth = errText.includes('invalid x-api-key') || errText.includes('authentication') || errText.includes('401');
         const errorMsg: Message = {
           id: uuidv4(),
           role: 'assistant',
           content: isBilling
             ? 'Saldo insuficiente na API Anthropic. Acesse console.anthropic.com → Plans & Billing para adicionar créditos.'
-            : 'Ops, tive um problema de conexão. Tenta de novo?',
+            : isAuth
+            ? 'API key inválida. Vá em Perfil e verifique sua chave Anthropic.'
+            : `Erro: ${errText}`,
           timestamp: Date.now(),
         };
         setMessages((prev) => {

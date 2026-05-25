@@ -8,14 +8,23 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
+  Switch,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Notifications from 'expo-notifications';
 import { UserProfile } from '../types';
 import { storage } from '../services/storage';
 import { reprocessHistory } from '../services/reprocess';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
-
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 interface Props {
   profile: UserProfile | null;
@@ -39,14 +48,112 @@ const LEVELS = [
   { value: 'advanced', label: 'Avançado' },
 ] as const;
 
+async function requestNotificationPermission(): Promise<boolean> {
+  const { status } = await Notifications.requestPermissionsAsync();
+  return status === 'granted';
+}
+
+async function scheduleWorkoutReminder(time: string) {
+  await Notifications.cancelAllScheduledNotificationsAsync();
+  const [hourStr, minuteStr] = time.split(':');
+  const hour = parseInt(hourStr, 10);
+  const minute = parseInt(minuteStr, 10);
+  if (isNaN(hour) || isNaN(minute)) return;
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Hora de treinar! 💪',
+      body: 'O AmigoFit tá te esperando. Você vai treinar hoje?',
+      sound: true,
+    },
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour, minute },
+  });
+}
+
+function SectionHeader({ title }: { title: string }) {
+  return <Text style={styles.sectionTitle}>{title}</Text>;
+}
+
+function Counter({
+  label,
+  value,
+  onChange,
+  unit,
+  min = 1,
+  max = 99,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  unit: string;
+  min?: number;
+  max?: number;
+}) {
+  return (
+    <View style={styles.counterRow}>
+      <Text style={styles.counterLabel}>{label}</Text>
+      <View style={styles.counterControls}>
+        <TouchableOpacity
+          style={styles.counterBtn}
+          onPress={() => onChange(Math.max(min, value - 1))}
+        >
+          <Text style={styles.counterBtnText}>−</Text>
+        </TouchableOpacity>
+        <Text style={styles.counterValue}>{value}<Text style={styles.counterUnit}> {unit}</Text></Text>
+        <TouchableOpacity
+          style={styles.counterBtn}
+          onPress={() => onChange(Math.min(max, value + 1))}
+        >
+          <Text style={styles.counterBtnText}>+</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 export default function ProfileScreen({ profile, authUser, onProfileUpdate, onApiKeySet, hasApiKey, onLogout }: Props) {
   const [name, setName] = useState(profile?.name ?? '');
   const [goal, setGoal] = useState<UserProfile['goal']>(profile?.goal ?? 'health');
   const [level, setLevel] = useState<UserProfile['level']>(profile?.level ?? 'beginner');
+
+  // Medidas corporais
+  const [age, setAge] = useState(profile?.age?.toString() ?? '');
+  const [weight, setWeight] = useState(profile?.weight?.toString() ?? '');
+  const [height, setHeight] = useState(profile?.height?.toString() ?? '');
+
+  // Metas fitness
+  const [weeklyWorkoutGoal, setWeeklyWorkoutGoal] = useState(profile?.weeklyWorkoutGoal ?? 3);
+  const [sleepGoal, setSleepGoal] = useState(profile?.sleepGoal ?? 8);
+
+  // Notificações
+  const [notifEnabled, setNotifEnabled] = useState(profile?.notificationEnabled ?? false);
+  const [notifTime, setNotifTime] = useState(profile?.notificationTime ?? '07:00');
+
   const [apiKey, setApiKey] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState('');
+
+  const handleToggleNotification = async (enabled: boolean) => {
+    if (enabled) {
+      const granted = await requestNotificationPermission();
+      if (!granted) {
+        Alert.alert('Permissão negada', 'Habilite as notificações nas configurações do iPhone para usar lembretes.');
+        return;
+      }
+      await scheduleWorkoutReminder(notifTime);
+    } else {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+    }
+    setNotifEnabled(enabled);
+  };
+
+  const handleTimeChange = async (time: string) => {
+    setNotifTime(time);
+    if (notifEnabled) {
+      await scheduleWorkoutReminder(time);
+    }
+  };
 
   const handleReprocess = async () => {
     const key = await storage.getApiKey();
@@ -91,6 +198,13 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
       name: name.trim(),
       goal,
       level,
+      age: age ? parseInt(age, 10) : undefined,
+      weight: weight ? parseFloat(weight) : undefined,
+      height: height ? parseInt(height, 10) : undefined,
+      weeklyWorkoutGoal,
+      sleepGoal,
+      notificationEnabled: notifEnabled,
+      notificationTime: notifTime,
       onboardingComplete: true,
     };
     await storage.saveProfile(updated);
@@ -114,6 +228,7 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Perfil</Text>
 
+        {/* Conta */}
         {authUser && (
           <View style={styles.section}>
             <View style={styles.userRow}>
@@ -131,8 +246,9 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
           </View>
         )}
 
+        {/* API Key */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Configuração da IA</Text>
+          <SectionHeader title="Configuração da IA" />
           <Text style={styles.sectionDesc}>
             Para ativar o AmigoFit, você precisa de uma chave da API Anthropic.{'\n'}
             Acesse: console.anthropic.com → API Keys
@@ -166,8 +282,9 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
           )}
         </View>
 
+        {/* Dados pessoais */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Seus dados</Text>
+          <SectionHeader title="Seus dados" />
 
           <Text style={styles.label}>Nome</Text>
           <TextInput
@@ -207,14 +324,116 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
               </TouchableOpacity>
             ))}
           </View>
-
-          <TouchableOpacity style={styles.saveBtn} onPress={saveProfile}>
-            <Text style={styles.saveBtnText}>Salvar Perfil</Text>
-          </TouchableOpacity>
         </View>
 
+        {/* Medidas corporais */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Histórico de conversas</Text>
+          <SectionHeader title="Medidas corporais" />
+          <Text style={styles.sectionDesc}>Usadas pela IA para personalizar as recomendações.</Text>
+          <View style={styles.measuresRow}>
+            <View style={styles.measureField}>
+              <Text style={styles.label}>Idade</Text>
+              <TextInput
+                style={styles.inputSmall}
+                value={age}
+                onChangeText={setAge}
+                placeholder="—"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="number-pad"
+                maxLength={3}
+              />
+              <Text style={styles.measureUnit}>anos</Text>
+            </View>
+            <View style={styles.measureField}>
+              <Text style={styles.label}>Peso</Text>
+              <TextInput
+                style={styles.inputSmall}
+                value={weight}
+                onChangeText={setWeight}
+                placeholder="—"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+                maxLength={5}
+              />
+              <Text style={styles.measureUnit}>kg</Text>
+            </View>
+            <View style={styles.measureField}>
+              <Text style={styles.label}>Altura</Text>
+              <TextInput
+                style={styles.inputSmall}
+                value={height}
+                onChangeText={setHeight}
+                placeholder="—"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="number-pad"
+                maxLength={3}
+              />
+              <Text style={styles.measureUnit}>cm</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Metas fitness */}
+        <View style={styles.section}>
+          <SectionHeader title="Metas fitness" />
+          <Text style={styles.sectionDesc}>Aparece como barra de progresso na tela de Insights.</Text>
+          <Counter
+            label="Treinos por semana"
+            value={weeklyWorkoutGoal}
+            onChange={setWeeklyWorkoutGoal}
+            unit="treinos"
+            min={1}
+            max={14}
+          />
+          <Counter
+            label="Meta de sono"
+            value={sleepGoal}
+            onChange={setSleepGoal}
+            unit="h/noite"
+            min={4}
+            max={12}
+          />
+        </View>
+
+        {/* Notificações */}
+        <View style={styles.section}>
+          <SectionHeader title="Lembrete de treino" />
+          <View style={styles.notifRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.notifLabel}>Receber lembrete diário</Text>
+              <Text style={styles.notifDesc}>Notificação no horário escolhido</Text>
+            </View>
+            <Switch
+              value={notifEnabled}
+              onValueChange={handleToggleNotification}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor={notifEnabled ? '#000' : '#888'}
+            />
+          </View>
+          {notifEnabled && (
+            <View style={styles.timeRow}>
+              <Text style={styles.label}>Horário (HH:MM)</Text>
+              <TextInput
+                style={[styles.input, styles.timeInput]}
+                value={notifTime}
+                onChangeText={handleTimeChange}
+                placeholder="07:00"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="numbers-and-punctuation"
+                maxLength={5}
+              />
+            </View>
+          )}
+        </View>
+
+        {/* Botão salvar */}
+        <TouchableOpacity style={styles.saveBtn} onPress={saveProfile}>
+          <Text style={styles.saveBtnText}>Salvar perfil</Text>
+        </TouchableOpacity>
+
+        {/* Reprocessar histórico */}
+        <View style={styles.section}>
+          <SectionHeader title="Histórico de conversas" />
           <Text style={styles.sectionDesc}>
             Processa todas as mensagens antigas e extrai dados relevantes para o Diário e Insights.
           </Text>
@@ -302,14 +521,50 @@ const styles = StyleSheet.create({
   optionBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   optionText: { color: colors.textSecondary, fontSize: fontSize.sm },
   optionTextActive: { color: '#000', fontWeight: '700' },
+
+  // Medidas
+  measuresRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs },
+  measureField: { flex: 1, alignItems: 'center' },
+  inputSmall: {
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    color: colors.text,
+    fontSize: fontSize.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    textAlign: 'center',
+    width: '100%',
+    fontWeight: '700',
+  },
+  measureUnit: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4 },
+
+  // Counter
+  counterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+  counterLabel: { color: colors.text, fontSize: fontSize.md, flex: 1 },
+  counterControls: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  counterBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  counterBtnText: { color: colors.text, fontSize: fontSize.lg, fontWeight: '600', lineHeight: 22 },
+  counterValue: { color: colors.text, fontSize: fontSize.lg, fontWeight: '700', minWidth: 60, textAlign: 'center' },
+  counterUnit: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '400' },
+
+  // Notificações
+  notifRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  notifLabel: { color: colors.text, fontSize: fontSize.md, fontWeight: '600' },
+  notifDesc: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
+  timeRow: { marginTop: spacing.md },
+  timeInput: { marginTop: 0 },
+
+  // Save
   saveBtn: {
     backgroundColor: colors.primary,
     borderRadius: radius.md,
     padding: spacing.md,
     alignItems: 'center',
-    marginTop: spacing.lg,
+    marginBottom: spacing.md,
   },
   saveBtnText: { color: '#000', fontSize: fontSize.md, fontWeight: '700' },
+
   reprocessBtn: {
     backgroundColor: colors.surfaceElevated,
     borderRadius: radius.md,

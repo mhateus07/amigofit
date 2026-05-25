@@ -127,6 +127,8 @@ export default function AuthScreen({ onAuth, initialMode = 'login' }: Props) {
                 placeholder={mode === 'register' ? 'Mínimo 6 caracteres' : '••••••••'}
                 placeholderTextColor={colors.textMuted}
                 secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
 

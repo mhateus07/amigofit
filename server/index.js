@@ -193,14 +193,25 @@ app.get('/api/messages', requireAuth, async (req, res) => {
 app.post('/api/messages', requireAuth, async (req, res) => {
   const { messages } = req.body;
   if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages must be array' });
-  await pool.query('DELETE FROM messages WHERE user_id=$1', [req.userId]);
-  for (const m of messages) {
-    await pool.query(
-      'INSERT INTO messages (id, user_id, role, content, extracted_data, timestamp) VALUES ($1,$2,$3,$4,$5,$6)',
-      [m.id, req.userId, m.role, m.content, JSON.stringify(m.extractedData || null), m.timestamp]
-    );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM messages WHERE user_id=$1', [req.userId]);
+    for (const m of messages) {
+      await client.query(
+        'INSERT INTO messages (id, user_id, role, content, extracted_data, timestamp) VALUES ($1,$2,$3,$4,$5,$6)',
+        [m.id, req.userId, m.role, m.content, JSON.stringify(m.extractedData || null), m.timestamp]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('Save messages error:', e.message);
+    res.status(500).json({ error: 'Erro ao salvar mensagens' });
+  } finally {
+    client.release();
   }
-  res.json({ ok: true });
 });
 
 // ── Extracted Data ────────────────────────────────────────

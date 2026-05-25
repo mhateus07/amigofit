@@ -4,6 +4,7 @@ export interface Message {
   content: string;
   timestamp: number;
   extractedData?: ExtractedData[];
+  imageUri?: string;
 }
 
 export interface ExtractedData {
@@ -23,6 +24,10 @@ export interface UserProfile {
   height?: number;
   restrictions?: string[];
   onboardingComplete: boolean;
+  weeklyWorkoutGoal?: number;
+  sleepGoal?: number;
+  notificationEnabled?: boolean;
+  notificationTime?: string;
 }
 
 export interface Conversation {

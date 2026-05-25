@@ -68,11 +68,21 @@ export default function OnboardingScreen({ authUser, onComplete }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Progress dots */}
-      <View style={styles.progress}>
-        {[0, 1, 2].map((i) => (
-          <View key={i} style={[styles.dot, step >= i && styles.dotActive]} />
-        ))}
+      {/* Top bar: back + progress */}
+      <View style={styles.topBar}>
+        {step > 0 ? (
+          <TouchableOpacity style={styles.backBtn} onPress={() => setStep(step - 1)}>
+            <Text style={styles.backBtnText}>← Voltar</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.backBtn} />
+        )}
+        <View style={styles.progress}>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={[styles.dot, step >= i && styles.dotActive]} />
+          ))}
+        </View>
+        <View style={styles.backBtn} />
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
@@ -207,21 +217,17 @@ export default function OnboardingScreen({ authUser, onComplete }: Props) {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {step > 0 && (
-        <TouchableOpacity style={styles.backBtn} onPress={() => setStep(step - 1)}>
-          <Text style={styles.backBtnText}>← Voltar</Text>
-        </TouchableOpacity>
-      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container:    { flex: 1, backgroundColor: colors.background },
-  progress:     { flexDirection: 'row', justifyContent: 'center', gap: spacing.xs, paddingTop: spacing.md, paddingBottom: spacing.sm },
+  topBar:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  progress:     { flexDirection: 'row', gap: spacing.xs },
   dot:          { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
   dotActive:    { width: 28, backgroundColor: colors.primary },
-  scroll:       { flexGrow: 1, padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: spacing.xxl },
+  scroll:       { flexGrow: 1, padding: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.xxl },
   emoji:        { fontSize: 52, marginBottom: spacing.md },
   stepTitle:    { color: colors.text, fontSize: fontSize.xxxl, fontWeight: '800', marginBottom: spacing.sm },
   stepDesc:     { color: colors.textSecondary, fontSize: fontSize.md, lineHeight: 24, marginBottom: spacing.xl },
@@ -271,6 +277,6 @@ const styles = StyleSheet.create({
   primaryBtnText:  { color: '#000', fontSize: fontSize.md, fontWeight: '700' },
   skipBtn:         { alignItems: 'center', paddingVertical: spacing.lg },
   skipBtnText:     { color: colors.textMuted, fontSize: fontSize.sm },
-  backBtn:         { padding: spacing.md, paddingBottom: spacing.lg },
+  backBtn:         { minWidth: 70, padding: spacing.xs },
   backBtnText:     { color: colors.textSecondary, fontSize: fontSize.sm },
 });

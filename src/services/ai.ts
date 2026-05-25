@@ -83,12 +83,40 @@ export class AIService {
   async chat(
     messages: Message[],
     profile: UserProfile | null,
-    diaryData: ExtractedData[] = []
+    diaryData: ExtractedData[] = [],
+    imageBase64?: string,
+    imageMimeType?: string
   ): Promise<string> {
-    const formatted = messages.slice(-20).map((m) => ({
+    const sliced = messages.slice(-20);
+
+    // Remove leading assistant messages (prefill not supported)
+    const firstUserIdx = sliced.findIndex((m) => m.role === 'user');
+    const trimmed = firstUserIdx >= 0 ? sliced.slice(firstUserIdx) : sliced;
+
+    type ApiMessage = { role: 'user' | 'assistant'; content: string | object[] };
+    const formatted: ApiMessage[] = trimmed.map((m) => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }));
+
+    // Safety: ensure last message is from user
+    while (formatted.length > 0 && formatted[formatted.length - 1].role === 'assistant') {
+      formatted.pop();
+    }
+
+    if (formatted.length === 0) return 'Pode me contar mais?';
+
+    // Attach image to the last user message if provided
+    if (imageBase64 && imageMimeType && formatted.length > 0) {
+      const last = formatted[formatted.length - 1];
+      formatted[formatted.length - 1] = {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: imageBase64 } },
+          { type: 'text', text: typeof last.content === 'string' ? last.content : '' },
+        ],
+      };
+    }
 
     const systemPrompt = buildSystemPrompt(profile, diaryData);
 

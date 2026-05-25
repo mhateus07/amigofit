@@ -7,6 +7,12 @@ import {
   TouchableOpacity,
   RefreshControl,
   Dimensions,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { format, isToday, isYesterday, startOfDay } from 'date-fns';
@@ -26,6 +32,7 @@ const CATEGORY_CONFIG: Record<ExtractedData['category'], { icon: string; color: 
   workout:     { icon: '🔥', color: '#FF7043', label: 'Treino',      bg: 'rgba(255,112,67,0.12)'  },
 };
 
+const CATEGORY_KEYS = Object.keys(CATEGORY_CONFIG) as ExtractedData['category'][];
 const FILTERS = ['Todos', 'Sono', 'Alimentação', 'Performance', 'Humor', 'Saúde', 'Treino'];
 const FILTER_MAP: Record<string, ExtractedData['category']> = {
   Sono: 'sleep', Alimentação: 'nutrition', Performance: 'performance',
@@ -69,7 +76,7 @@ function DataCard({ item }: { item: ExtractedData }) {
         <Text style={styles.cardTime}>{format(item.timestamp, 'HH:mm')}</Text>
       </View>
       <Text style={styles.cardValue}>{item.label}: <Text style={[styles.cardValueBold, { color: cfg.color }]}>{item.value}</Text></Text>
-      <Text style={styles.cardRaw}>"{item.rawText}"</Text>
+      {!!item.rawText && <Text style={styles.cardRaw}>"{item.rawText}"</Text>}
     </View>
   );
 }
@@ -112,10 +119,114 @@ function StatsBar({ data }: { data: ExtractedData[] }) {
   );
 }
 
+function AddEntryModal({
+  visible,
+  onClose,
+  onSave,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onSave: (entry: Omit<ExtractedData, 'timestamp'>) => void;
+}) {
+  const [category, setCategory] = useState<ExtractedData['category']>('workout');
+  const [label, setLabel] = useState('');
+  const [value, setValue] = useState('');
+
+  const reset = () => { setCategory('workout'); setLabel(''); setValue(''); };
+
+  const handleSave = () => {
+    if (!label.trim() || !value.trim()) {
+      Alert.alert('Campos obrigatórios', 'Preencha o nome e o valor do registro.');
+      return;
+    }
+    onSave({ category, label: label.trim(), value: value.trim(), rawText: '' });
+    reset();
+    onClose();
+  };
+
+  const handleClose = () => { reset(); onClose(); };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.modalOverlay}
+      >
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Novo registro</Text>
+
+          <Text style={styles.modalLabel}>Categoria</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
+            <View style={styles.categoryRow}>
+              {CATEGORY_KEYS.map((key) => {
+                const cfg = CATEGORY_CONFIG[key];
+                const active = category === key;
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={[styles.categoryBtn, active && { backgroundColor: cfg.bg, borderColor: cfg.color }]}
+                    onPress={() => setCategory(key)}
+                  >
+                    <Text style={styles.categoryBtnIcon}>{cfg.icon}</Text>
+                    <Text style={[styles.categoryBtnLabel, active && { color: cfg.color }]}>{cfg.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+
+          <Text style={styles.modalLabel}>O que foi registrado?</Text>
+          <TextInput
+            style={styles.modalInput}
+            value={label}
+            onChangeText={setLabel}
+            placeholder={
+              category === 'sleep' ? 'Ex: Horas dormidas' :
+              category === 'workout' ? 'Ex: Treino de costas' :
+              category === 'nutrition' ? 'Ex: Refeição pré-treino' :
+              category === 'mood' ? 'Ex: Humor do dia' :
+              category === 'performance' ? 'Ex: PR no supino' :
+              'Ex: Dor de cabeça'
+            }
+            placeholderTextColor={colors.textMuted}
+          />
+
+          <Text style={styles.modalLabel}>Valor</Text>
+          <TextInput
+            style={styles.modalInput}
+            value={value}
+            onChangeText={setValue}
+            placeholder={
+              category === 'sleep' ? 'Ex: 7.5h' :
+              category === 'workout' ? 'Ex: Feito, 4 séries' :
+              category === 'nutrition' ? 'Ex: Frango + arroz' :
+              category === 'mood' ? 'Ex: Bem disposto' :
+              category === 'performance' ? 'Ex: 100kg x 5' :
+              'Ex: Leve, passou em 1h'
+            }
+            placeholderTextColor={colors.textMuted}
+          />
+
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={handleClose}>
+              <Text style={styles.cancelBtnText}>Cancelar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+              <Text style={styles.saveBtnText}>Salvar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 export default function DiaryScreen() {
   const [allData, setAllData] = useState<ExtractedData[]>([]);
   const [filter, setFilter] = useState('Todos');
   const [refreshing, setRefreshing] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const load = useCallback(async () => {
     const data = await storage.getExtractedData();
@@ -125,6 +236,12 @@ export default function DiaryScreen() {
   useEffect(() => { load(); }, []);
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+
+  const handleSaveEntry = async (entry: Omit<ExtractedData, 'timestamp'>) => {
+    const newEntry: ExtractedData = { ...entry, timestamp: Date.now() };
+    await storage.addExtractedData([newEntry]);
+    setAllData(prev => [newEntry, ...prev]);
+  };
 
   const filtered = filter === 'Todos' ? allData : allData.filter((d) => d.category === FILTER_MAP[filter]);
   const groups = groupByDate(filtered);
@@ -150,8 +267,10 @@ export default function DiaryScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.title}>Diário</Text>
-        <Text style={styles.subtitle}>{allData.length} registros totais</Text>
+        <View>
+          <Text style={styles.title}>Diário</Text>
+          <Text style={styles.subtitle}>{allData.length} registros totais</Text>
+        </View>
       </View>
 
       <FlatList
@@ -193,7 +312,7 @@ export default function DiaryScreen() {
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>📋</Text>
               <Text style={styles.emptyText}>Nenhum registro ainda</Text>
-              <Text style={styles.emptySubtext}>Converse com o AmigoFit e os dados vão aparecer aqui automaticamente!</Text>
+              <Text style={styles.emptySubtext}>Converse com o AmigoFit ou toque em + para adicionar manualmente!</Text>
             </View>
           );
         }}
@@ -201,16 +320,27 @@ export default function DiaryScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
       />
+
+      {/* FAB */}
+      <TouchableOpacity style={styles.fab} onPress={() => setShowAddModal(true)} activeOpacity={0.85}>
+        <Text style={styles.fabText}>+</Text>
+      </TouchableOpacity>
+
+      <AddEntryModal
+        visible={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSave={handleSaveEntry}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container:   { flex: 1, backgroundColor: colors.background },
-  header:      { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs },
+  header:      { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   title:       { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },
   subtitle:    { color: colors.textSecondary, fontSize: fontSize.sm },
-  list:        { padding: spacing.md, paddingBottom: spacing.xxl },
+  list:        { padding: spacing.md, paddingBottom: 100 },
   statsBar:    { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
   statsTitle:  { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600', textTransform: 'uppercase', marginBottom: spacing.sm },
   statRow:     { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm, gap: spacing.sm },
@@ -242,4 +372,59 @@ const styles = StyleSheet.create({
   emptyIcon:   { fontSize: 48, marginBottom: spacing.md },
   emptyText:   { color: colors.text, fontSize: fontSize.lg, fontWeight: '600' },
   emptySubtext: { color: colors.textSecondary, fontSize: fontSize.sm, textAlign: 'center', marginTop: spacing.xs, paddingHorizontal: spacing.xl },
+
+  // FAB
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.primary,
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  fabText: { color: '#000', fontSize: 28, fontWeight: '300', lineHeight: 32 },
+
+  // Modal
+  modalOverlay:  { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+  modalSheet:    { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing.lg, paddingBottom: 40 },
+  modalHandle:   { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: spacing.md },
+  modalTitle:    { color: colors.text, fontSize: fontSize.lg, fontWeight: '700', marginBottom: spacing.md },
+  modalLabel:    { color: colors.textSecondary, fontSize: fontSize.sm, marginBottom: spacing.xs, marginTop: spacing.sm },
+  modalInput:    {
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    color: colors.text,
+    fontSize: fontSize.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  categoryScroll: { marginBottom: spacing.xs },
+  categoryRow:   { flexDirection: 'row', gap: spacing.sm, paddingVertical: 4 },
+  categoryBtn:   {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  categoryBtnIcon:  { fontSize: 14 },
+  categoryBtnLabel: { color: colors.textSecondary, fontSize: fontSize.sm },
+  modalActions:  { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
+  cancelBtn:     { flex: 1, padding: spacing.md, borderRadius: radius.md, alignItems: 'center', backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border },
+  cancelBtnText: { color: colors.textSecondary, fontWeight: '600' },
+  saveBtn:       { flex: 1, padding: spacing.md, borderRadius: radius.md, alignItems: 'center', backgroundColor: colors.primary },
+  saveBtnText:   { color: '#000', fontWeight: '700' },
 });

@@ -96,7 +96,7 @@ export default function WelcomeScreen({ onLogin, onRegister }: Props) {
   );
 }
 
-const HERO_HEIGHT = 280;
+const HERO_HEIGHT = 300;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
@@ -104,14 +104,12 @@ const styles = StyleSheet.create({
   hero: {
     height: HERO_HEIGHT,
     width,
-    alignItems: 'center',
-    justifyContent: 'center',
     overflow: 'hidden',
-    backgroundColor: '#000',
+    backgroundColor: colors.background,
   },
   mascot: {
-    width: width * 0.72,
-    height: HERO_HEIGHT,
+    width: width * 1.25,
+    height: HERO_HEIGHT * 1.25,
   },
 
   body: {
