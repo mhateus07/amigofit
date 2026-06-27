@@ -1,12 +1,23 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Message, UserProfile, ExtractedData } from '../types';
+import { Message, UserProfile, ExtractedData, AIProvider } from '../types';
 
 export const API_BASE = 'http://173.212.208.109:3001';
 
 const LOCAL_KEYS = {
   TOKEN: 'amigofit_token',
-  API_KEY: 'amigofit_api_key',
   USER: 'amigofit_user',
+  PROVIDER: 'amigofit_provider',
+  API_KEY_ANTHROPIC: 'amigofit_api_key',
+  API_KEY_OPENAI: 'amigofit_api_key_openai',
+  API_KEY_GEMINI: 'amigofit_api_key_gemini',
+  API_KEY_GROQ: 'amigofit_api_key_groq',
+};
+
+const PROVIDER_KEY_MAP: Record<AIProvider, string> = {
+  anthropic: LOCAL_KEYS.API_KEY_ANTHROPIC,
+  openai: LOCAL_KEYS.API_KEY_OPENAI,
+  gemini: LOCAL_KEYS.API_KEY_GEMINI,
+  groq: LOCAL_KEYS.API_KEY_GROQ,
 };
 
 // ── Auth token ────────────────────────────────────────────
@@ -28,10 +39,20 @@ export async function saveStoredUser(user: { id: string; name: string; email: st
   await AsyncStorage.setItem(LOCAL_KEYS.USER, JSON.stringify(user));
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
+// ── AI Provider ───────────────────────────────────────────
+export async function getProvider(): Promise<AIProvider> {
+  const p = await AsyncStorage.getItem(LOCAL_KEYS.PROVIDER);
+  return (p as AIProvider) || 'anthropic';
+}
+export async function saveProvider(p: AIProvider): Promise<void> {
+  await AsyncStorage.setItem(LOCAL_KEYS.PROVIDER, p);
+}
+
+export async function authHeaders(): Promise<Record<string, string>> {
   const token = await getToken();
-  const apiKey = await AsyncStorage.getItem(LOCAL_KEYS.API_KEY);
-  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  const provider = await getProvider();
+  const apiKey = await AsyncStorage.getItem(PROVIDER_KEY_MAP[provider]);
+  const h: Record<string, string> = { 'Content-Type': 'application/json', 'x-provider': provider };
   if (token) h['Authorization'] = `Bearer ${token}`;
   if (apiKey) h['x-api-key'] = apiKey;
   return h;
@@ -96,17 +117,24 @@ async function addExtractedData(data: ExtractedData[]): Promise<void> {
   } catch { /* silent */ }
 }
 
-// ── API Key (local only) ──────────────────────────────────
-async function getApiKey(): Promise<string | null> {
-  return AsyncStorage.getItem(LOCAL_KEYS.API_KEY);
+// ── API Key (per-provider) ────────────────────────────────
+async function getApiKey(provider?: AIProvider): Promise<string | null> {
+  const p = provider ?? await getProvider();
+  return AsyncStorage.getItem(PROVIDER_KEY_MAP[p]);
 }
-async function saveApiKey(key: string): Promise<void> {
-  await AsyncStorage.setItem(LOCAL_KEYS.API_KEY, key);
+async function saveApiKey(key: string, provider?: AIProvider): Promise<void> {
+  const p = provider ?? await getProvider();
+  await AsyncStorage.setItem(PROVIDER_KEY_MAP[p], key);
+}
+async function hasAnyApiKey(): Promise<boolean> {
+  const pairs = await AsyncStorage.multiGet(Object.values(PROVIDER_KEY_MAP));
+  return pairs.some(([, v]) => !!v);
 }
 
 export const storage = {
   getMessages, saveMessages, addMessage,
   getProfile, saveProfile,
   getExtractedData, addExtractedData,
-  getApiKey, saveApiKey,
+  getApiKey, saveApiKey, hasAnyApiKey,
+  getProvider, saveProvider,
 };

@@ -23,7 +23,6 @@ import { colors, spacing, radius, fontSize } from '../constants/theme';
 
 interface Props {
   profile: UserProfile | null;
-  apiKey: string | null;
 }
 
 // Renderiza linhas com **negrito** e *itálico* sem dependência externa
@@ -99,8 +98,8 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-export default function ChatScreen({ profile, apiKey }: Props) {
-  const { messages, isLoading, sendMessage, clearHistory } = useChat(profile, apiKey);
+export default function ChatScreen({ profile }: Props) {
+  const { messages, isLoading, sendMessage, clearHistory } = useChat(profile);
   const [inputText, setInputText] = useState('');
   const [pendingImage, setPendingImage] = useState<{ uri: string; base64: string; mimeType: string } | null>(null);
   const listRef = useRef<FlatList>(null);

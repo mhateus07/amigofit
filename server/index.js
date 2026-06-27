@@ -70,7 +70,7 @@ const authLimiter = rateLimit({
 // ── Middleware ────────────────────────────────────────────
 app.use(cors({
   origin: '*',
-  allowedHeaders: ['Content-Type', 'x-api-key', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'x-api-key', 'x-provider', 'Authorization'],
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   preflightContinue: false,
   optionsSuccessStatus: 204,
@@ -97,10 +97,164 @@ function requireAuth(req, res, next) {
   }
 }
 
-function getAnthropicClient(req, res) {
+// ── AI provider config ────────────────────────────────────
+const PROVIDER_MODELS = {
+  anthropic: 'claude-sonnet-4-6',
+  openai: 'gpt-4o',
+  gemini: 'gemini-1.5-flash',
+  groq: 'llama-3.3-70b-versatile',
+};
+
+function getProviderConfig(req, res) {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) { res.status(401).json({ error: 'API key ausente' }); return null; }
-  return new Anthropic({ apiKey });
+  const provider = req.headers['x-provider'] || 'anthropic';
+  return { provider, apiKey };
+}
+
+// Convert Anthropic-style messages to OpenAI/Groq format
+function toOpenAIMessages(messages, systemPrompt) {
+  const result = [{ role: 'system', content: systemPrompt }];
+  for (const m of messages) {
+    if (typeof m.content === 'string') {
+      result.push({ role: m.role, content: m.content });
+    } else if (Array.isArray(m.content)) {
+      // Extract text from Anthropic multi-part content (images become placeholder)
+      const text = m.content
+        .map(part => part.type === 'text' ? part.text : '[imagem]')
+        .join(' ');
+      result.push({ role: m.role, content: text });
+    }
+  }
+  return result;
+}
+
+// Convert Anthropic-style messages to Gemini format
+function toGeminiContents(messages) {
+  return messages.map(m => {
+    let text = '';
+    if (typeof m.content === 'string') {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      text = m.content.map(p => p.type === 'text' ? p.text : '[imagem]').join(' ');
+    }
+    return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
+  });
+}
+
+async function chatWithProvider(config, messages, systemPrompt) {
+  const { provider, apiKey } = config;
+  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
+
+  if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages,
+    });
+    const block = response.content[0];
+    return block.type === 'text' ? block.text : '';
+  }
+
+  if (provider === 'openai' || provider === 'groq') {
+    const baseUrl = provider === 'groq'
+      ? 'https://api.groq.com/openai/v1'
+      : 'https://api.openai.com/v1';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        messages: toOpenAIMessages(messages, systemPrompt),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    return data.choices[0]?.message?.content || '';
+  }
+
+  if (provider === 'gemini') {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: toGeminiContents(messages),
+        }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    return data.candidates[0]?.content?.parts[0]?.text || '';
+  }
+
+  throw new Error(`Provedor desconhecido: ${provider}`);
+}
+
+async function extractWithProvider(config, message) {
+  const { provider, apiKey } = config;
+  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
+
+  const PROMPT = `Analise a mensagem e extraia dados estruturados sobre saúde, treino, alimentação e bem-estar. Retorne APENAS JSON válido (sem markdown):
+
+{"data":[{"category":"sleep|nutrition|performance|mood|health|workout","label":"descrição curta","value":"valor extraído","rawText":"trecho original"}]}
+
+Se não houver dados relevantes: {"data":[]}`;
+
+  const userContent = `${PROMPT}\n\nMensagem: "${message}"`;
+  let text;
+
+  if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 512,
+      messages: [{ role: 'user', content: userContent }],
+    });
+    text = response.content[0].text;
+  } else if (provider === 'openai' || provider === 'groq') {
+    const baseUrl = provider === 'groq'
+      ? 'https://api.groq.com/openai/v1'
+      : 'https://api.openai.com/v1';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_tokens: 512,
+        messages: [{ role: 'user', content: userContent }],
+        response_format: { type: 'json_object' },
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    text = data.choices[0]?.message?.content || '{"data":[]}';
+  } else if (provider === 'gemini') {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: userContent }] }],
+          generationConfig: { responseMimeType: 'application/json' },
+        }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    text = data.candidates[0]?.content?.parts[0]?.text || '{"data":[]}';
+  } else {
+    return [];
+  }
+
+  text = text.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+  return JSON.parse(text).data || [];
 }
 
 // ── Health ────────────────────────────────────────────────
@@ -237,18 +391,12 @@ app.post('/api/extracted-data', requireAuth, async (req, res) => {
 
 // ── AI: Chat ──────────────────────────────────────────────
 app.post('/api/chat', requireAuth, async (req, res) => {
-  const client = getAnthropicClient(req, res);
-  if (!client) return;
+  const config = getProviderConfig(req, res);
+  if (!config) return;
   const { messages, systemPrompt } = req.body;
   try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages,
-    });
-    const block = response.content[0];
-    res.json({ text: block.type === 'text' ? block.text : '' });
+    const text = await chatWithProvider(config, messages, systemPrompt);
+    res.json({ text });
   } catch (e) {
     console.error('Chat error:', e.message);
     res.status(500).json({ error: e.message });
@@ -257,22 +405,12 @@ app.post('/api/chat', requireAuth, async (req, res) => {
 
 // ── AI: Extract ───────────────────────────────────────────
 app.post('/api/extract', requireAuth, async (req, res) => {
-  const client = getAnthropicClient(req, res);
-  if (!client) return;
+  const config = getProviderConfig(req, res);
+  if (!config) return;
   const { message } = req.body;
-  const PROMPT = `Analise a mensagem e extraia dados estruturados sobre saúde, treino, alimentação e bem-estar. Retorne APENAS JSON válido (sem markdown):
-
-{"data":[{"category":"sleep|nutrition|performance|mood|health|workout","label":"descrição curta","value":"valor extraído","rawText":"trecho original"}]}
-
-Se não houver dados relevantes: {"data":[]}`;
   try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 512,
-      messages: [{ role: 'user', content: `${PROMPT}\n\nMensagem: "${message}"` }],
-    });
-    const text = response.content[0].text.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
-    res.json({ data: JSON.parse(text).data || [] });
+    const data = await extractWithProvider(config, message);
+    res.json({ data });
   } catch (e) {
     console.error('Extract error:', e.message);
     res.json({ data: [] });

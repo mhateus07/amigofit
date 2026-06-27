@@ -1,4 +1,4 @@
-import { storage, API_BASE } from './storage';
+import { storage, API_BASE, authHeaders } from './storage';
 import { AIService } from './ai';
 import { ExtractedData } from '../types';
 
@@ -17,7 +17,6 @@ async function checkBackend(): Promise<boolean> {
 }
 
 export async function reprocessHistory(
-  apiKey: string,
   onProgress?: (current: number, total: number) => void
 ): Promise<{ processed: number; dataPoints: number; error?: string }> {
   const alive = await checkBackend();
@@ -33,14 +32,13 @@ export async function reprocessHistory(
   const userMessages = messages.filter((m) => m.role === 'user');
   if (userMessages.length === 0) return { processed: 0, dataPoints: 0 };
 
-  // Consider a message processed if there's extracted data within 10s of its timestamp
   const unprocessed = userMessages.filter((msg) =>
     !existingData.some((d) => Math.abs(d.timestamp - msg.timestamp) < 10000)
   );
 
   if (unprocessed.length === 0) return { processed: 0, dataPoints: 0 };
 
-  const service = new AIService(apiKey);
+  const service = new AIService();
   let totalDataPoints = 0;
 
   for (let i = 0; i < unprocessed.length; i++) {

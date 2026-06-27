@@ -1,7 +1,7 @@
 import { Message, UserProfile, ExtractedData } from '../types';
 import { format, subDays, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { API_BASE, getToken } from './storage';
+import { API_BASE, authHeaders } from './storage';
 
 function buildDiaryContext(diaryData: ExtractedData[]): string {
   if (diaryData.length === 0) return '';
@@ -68,18 +68,6 @@ REGRAS DE COMPORTAMENTO:
 }
 
 export class AIService {
-  constructor(private apiKey: string) {}
-
-  private async headers(): Promise<Record<string, string>> {
-    const token = await getToken();
-    const h: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'x-api-key': this.apiKey,
-    };
-    if (token) h['Authorization'] = `Bearer ${token}`;
-    return h;
-  }
-
   async chat(
     messages: Message[],
     profile: UserProfile | null,
@@ -89,7 +77,6 @@ export class AIService {
   ): Promise<string> {
     const sliced = messages.slice(-20);
 
-    // Remove leading assistant messages (prefill not supported)
     const firstUserIdx = sliced.findIndex((m) => m.role === 'user');
     const trimmed = firstUserIdx >= 0 ? sliced.slice(firstUserIdx) : sliced;
 
@@ -99,14 +86,12 @@ export class AIService {
       content: m.content,
     }));
 
-    // Safety: ensure last message is from user
     while (formatted.length > 0 && formatted[formatted.length - 1].role === 'assistant') {
       formatted.pop();
     }
 
     if (formatted.length === 0) return 'Pode me contar mais?';
 
-    // Attach image to the last user message if provided
     if (imageBase64 && imageMimeType && formatted.length > 0) {
       const last = formatted[formatted.length - 1];
       formatted[formatted.length - 1] = {
@@ -122,7 +107,7 @@ export class AIService {
 
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
-      headers: await this.headers(),
+      headers: await authHeaders(),
       body: JSON.stringify({ messages: formatted, systemPrompt }),
     });
 
@@ -138,7 +123,7 @@ export class AIService {
     try {
       const res = await fetch(`${API_BASE}/api/extract`, {
         method: 'POST',
-        headers: await this.headers(),
+        headers: await authHeaders(),
         body: JSON.stringify({ message: userMessage }),
       });
       const data = await res.json();

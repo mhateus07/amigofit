@@ -37,6 +37,8 @@ export interface Conversation {
   summary?: string;
 }
 
+export type AIProvider = 'anthropic' | 'openai' | 'gemini' | 'groq';
+
 export type RootStackParamList = {
   Onboarding: undefined;
   Main: undefined;

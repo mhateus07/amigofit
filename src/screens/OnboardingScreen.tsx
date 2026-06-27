@@ -4,9 +4,16 @@ import {
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { UserProfile } from '../types';
-import { storage } from '../services/storage';
+import { UserProfile, AIProvider } from '../types';
+import { storage, saveProvider } from '../services/storage';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
+
+const PROVIDERS: { value: AIProvider; label: string; icon: string; prefix: string; hint: string }[] = [
+  { value: 'anthropic', label: 'Anthropic', icon: '🟣', prefix: 'sk-ant-', hint: 'console.anthropic.com' },
+  { value: 'openai',    label: 'OpenAI',    icon: '🟢', prefix: 'sk-',     hint: 'platform.openai.com' },
+  { value: 'groq',      label: 'Groq',      icon: '⚡',  prefix: 'gsk_',    hint: 'console.groq.com' },
+  { value: 'gemini',    label: 'Gemini',    icon: '🔵', prefix: 'AIza',    hint: 'aistudio.google.com' },
+];
 
 interface Props {
   authUser: { id: string; name: string; email: string };
@@ -31,9 +38,12 @@ export default function OnboardingScreen({ authUser, onComplete }: Props) {
   const [name, setName] = useState(authUser.name.split(' ')[0]);
   const [goal, setGoal] = useState<UserProfile['goal']>('hypertrophy');
   const [level, setLevel] = useState<UserProfile['level']>('beginner');
+  const [selectedProvider, setSelectedProvider] = useState<AIProvider>('anthropic');
   const [apiKey, setApiKey] = useState('');
   const [keyError, setKeyError] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const providerInfo = PROVIDERS.find(p => p.value === selectedProvider)!;
 
   const saveAndComplete = async (key: string) => {
     setSaving(true);
@@ -44,7 +54,10 @@ export default function OnboardingScreen({ authUser, onComplete }: Props) {
       onboardingComplete: true,
     };
     const ops: Promise<void>[] = [storage.saveProfile(profile)];
-    if (key) ops.push(storage.saveApiKey(key));
+    if (key) {
+      ops.push(storage.saveApiKey(key, selectedProvider));
+      ops.push(saveProvider(selectedProvider));
+    }
     await Promise.all(ops);
     onComplete(profile, key);
   };
@@ -55,8 +68,8 @@ export default function OnboardingScreen({ authUser, onComplete }: Props) {
       setKeyError('Cole sua chave para continuar, ou toque em "Configurar depois".');
       return;
     }
-    if (!apiKey.trim().startsWith('sk-ant-')) {
-      setKeyError('Chave inválida. Deve começar com "sk-ant-". Confira em console.anthropic.com → API Keys.');
+    if (!apiKey.trim().startsWith(providerInfo.prefix)) {
+      setKeyError(`Chave inválida para ${providerInfo.label}. Deve começar com "${providerInfo.prefix}". Acesse ${providerInfo.hint}`);
       return;
     }
     await saveAndComplete(apiKey.trim());
@@ -176,23 +189,40 @@ export default function OnboardingScreen({ authUser, onComplete }: Props) {
               <Text style={styles.emoji}>🤖</Text>
               <Text style={styles.stepTitle}>Ativar a IA</Text>
               <Text style={styles.stepDesc}>
-                Para conversar comigo, você precisa de uma chave da API Anthropic. É gratuito criar — você só paga pelo uso (bem barato).
+                Escolha seu provedor de IA e adicione a chave. É gratuito criar conta — você só paga pelo uso.
               </Text>
 
-              <View style={styles.instructionBox}>
-                <Text style={styles.instructionTitle}>Como obter sua chave:</Text>
-                <Text style={styles.instructionStep}>1. Acesse console.anthropic.com</Text>
-                <Text style={styles.instructionStep}>2. Crie uma conta gratuita</Text>
-                <Text style={styles.instructionStep}>3. Clique em "API Keys" → "Create Key"</Text>
-                <Text style={styles.instructionStep}>4. Cole a chave abaixo</Text>
+              {/* Provider selector */}
+              <Text style={styles.label}>Provedor de IA</Text>
+              <View style={styles.providerRow}>
+                {PROVIDERS.map((p) => (
+                  <TouchableOpacity
+                    key={p.value}
+                    style={[styles.providerBtn, selectedProvider === p.value && styles.providerBtnActive]}
+                    onPress={() => { setSelectedProvider(p.value); setApiKey(''); setKeyError(''); }}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={styles.providerBtnIcon}>{p.icon}</Text>
+                    <Text style={[styles.providerBtnLabel, selectedProvider === p.value && styles.providerBtnLabelActive]}>
+                      {p.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
 
-              <Text style={styles.label}>Chave da API Anthropic</Text>
+              <View style={styles.instructionBox}>
+                <Text style={styles.instructionTitle}>Como obter sua chave ({providerInfo.label}):</Text>
+                <Text style={styles.instructionStep}>1. Acesse {providerInfo.hint}</Text>
+                <Text style={styles.instructionStep}>2. Crie uma conta (gratuita)</Text>
+                <Text style={styles.instructionStep}>3. Crie uma API Key e cole abaixo</Text>
+              </View>
+
+              <Text style={styles.label}>Chave da API ({providerInfo.label})</Text>
               <TextInput
                 style={[styles.input, !!keyError && styles.inputError]}
                 value={apiKey}
                 onChangeText={(t) => { setApiKey(t); setKeyError(''); }}
-                placeholder="sk-ant-..."
+                placeholder={`${providerInfo.prefix}...`}
                 placeholderTextColor={colors.textMuted}
                 secureTextEntry
                 autoCapitalize="none"
@@ -279,4 +309,16 @@ const styles = StyleSheet.create({
   skipBtnText:     { color: colors.textMuted, fontSize: fontSize.sm },
   backBtn:         { minWidth: 70, padding: spacing.xs },
   backBtnText:     { color: colors.textSecondary, fontSize: fontSize.sm },
+
+  // Provider selector (onboarding step 2)
+  providerRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
+  providerBtn:     {
+    flex: 1, minWidth: '45%', alignItems: 'center', paddingVertical: spacing.sm,
+    backgroundColor: colors.surface, borderRadius: radius.md,
+    borderWidth: 1.5, borderColor: colors.border, gap: 2,
+  },
+  providerBtnActive: { borderColor: colors.primary, backgroundColor: 'rgba(0,200,83,0.06)' },
+  providerBtnIcon:  { fontSize: 18 },
+  providerBtnLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
+  providerBtnLabelActive: { color: colors.primary },
 });

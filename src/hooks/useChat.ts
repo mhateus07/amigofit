@@ -5,15 +5,12 @@ const uuidv4 = () => `${Date.now().toString(36)}-${Math.random().toString(36).sl
 import { storage } from '../services/storage';
 import { AIService } from '../services/ai';
 
-export function useChat(profile: UserProfile | null, apiKey: string | null) {
+const aiService = new AIService();
+
+export function useChat(profile: UserProfile | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const initialized = useRef(false);
-  const aiServiceRef = useRef<AIService | null>(null);
-
-  useEffect(() => {
-    aiServiceRef.current = apiKey ? new AIService(apiKey) : null;
-  }, [apiKey]);
 
   useEffect(() => {
     if (initialized.current) return;
@@ -59,11 +56,12 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
       setIsLoading(true);
 
       try {
-        if (!aiServiceRef.current) {
+        const hasKey = await storage.hasAnyApiKey();
+        if (!hasKey) {
           const noKeyMsg: Message = {
             id: uuidv4(),
             role: 'assistant',
-            content: 'Para ativar a IA, vá em Perfil e configure sua chave da API Anthropic.',
+            content: 'Para ativar a IA, vá em Perfil → Configuração da IA e adicione sua chave de API.',
             timestamp: Date.now(),
           };
           setMessages((prev) => {
@@ -77,8 +75,8 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
         const diaryData = await storage.getExtractedData();
 
         const [aiResponse, extractedData] = await Promise.all([
-          aiServiceRef.current.chat(conversationForAI, profile, diaryData, imageBase64, imageMimeType),
-          aiServiceRef.current.extractData(text),
+          aiService.chat(conversationForAI, profile, diaryData, imageBase64, imageMimeType),
+          aiService.extractData(text),
         ]);
 
         const assistantMessage: Message = {
@@ -100,15 +98,15 @@ export function useChat(profile: UserProfile | null, apiKey: string | null) {
         }
       } catch (error) {
         const errText = error instanceof Error ? error.message : String(error);
-        const isBilling = errText.includes('credit balance');
-        const isAuth = errText.includes('invalid x-api-key') || errText.includes('authentication') || errText.includes('401');
+        const isBilling = errText.includes('credit balance') || errText.includes('insufficient_quota');
+        const isAuth = errText.includes('invalid') && errText.includes('key') || errText.includes('authentication') || errText.includes('401');
         const errorMsg: Message = {
           id: uuidv4(),
           role: 'assistant',
           content: isBilling
-            ? 'Saldo insuficiente na API Anthropic. Acesse console.anthropic.com → Plans & Billing para adicionar créditos.'
+            ? 'Saldo insuficiente na API. Acesse o painel do seu provedor para adicionar créditos.'
             : isAuth
-            ? 'API key inválida. Vá em Perfil e verifique sua chave Anthropic.'
+            ? 'Chave de API inválida. Vá em Perfil → Configuração da IA e verifique sua chave.'
             : `Erro: ${errText}`,
           timestamp: Date.now(),
         };

@@ -45,21 +45,18 @@ export default function App() {
   const [authReady, setAuthReady]   = useState(false);
   const [authUser, setAuthUser]     = useState<{ id: string; name: string; email: string } | null>(null);
   const [profile, setProfile]       = useState<UserProfile | null>(null);
-  const [apiKey, setApiKey]         = useState<string | null>(null);
   const [authMode, setAuthMode]     = useState<'login' | 'register'>('login');
   const [showAuth, setShowAuth]     = useState(false);
 
   useEffect(() => {
-    // Garante que authReady seja true mesmo se o fetch travar ou lançar erro
     const fallback = setTimeout(() => setAuthReady(true), 6000);
     (async () => {
       try {
         const [token, user] = await Promise.all([getToken(), getStoredUser()]);
         if (token && user) {
           setAuthUser(user);
-          const [p, k] = await Promise.all([storage.getProfile(), storage.getApiKey()]);
+          const p = await storage.getProfile();
           setProfile(p);
-          setApiKey(k);
         }
       } catch (e) {
         console.warn('Auth init error:', e);
@@ -72,14 +69,12 @@ export default function App() {
 
   const handleAuth = async (user: { id: string; name: string; email: string }, _token: string) => {
     setAuthUser(user);
-    const [p, k] = await Promise.all([storage.getProfile(), storage.getApiKey()]);
+    const p = await storage.getProfile();
     setProfile(p);
-    setApiKey(k);
   };
 
-  const handleOnboardingComplete = (p: UserProfile, key: string) => {
+  const handleOnboardingComplete = (p: UserProfile, _key: string) => {
     setProfile(p);
-    if (key) setApiKey(key);
   };
 
   const handleLogout = async () => {
@@ -87,11 +82,6 @@ export default function App() {
     setAuthUser(null);
     setProfile(null);
     setShowAuth(false);
-  };
-
-  const handleApiKeySet = async (key: string) => {
-    await storage.saveApiKey(key);
-    setApiKey(key);
   };
 
   // Splash always shows first
@@ -178,7 +168,7 @@ export default function App() {
                 name="Chat"
                 options={{ tabBarIcon: ({ focused }) => <TabIcon icon="💬" focused={focused} /> }}
               >
-                {() => <ChatScreen profile={profile} apiKey={apiKey} />}
+                {() => <ChatScreen profile={profile} />}
               </Tab.Screen>
               <Tab.Screen
                 name="Diário"
@@ -199,8 +189,6 @@ export default function App() {
                     profile={profile}
                     authUser={authUser}
                     onProfileUpdate={setProfile}
-                    onApiKeySet={handleApiKeySet}
-                    hasApiKey={!!apiKey}
                     onLogout={handleLogout}
                   />
                 )}
