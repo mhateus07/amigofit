@@ -8,26 +8,18 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
-  Switch,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Notifications from 'expo-notifications';
 import { UserProfile } from '../types';
 import { storage } from '../services/storage';
 import { reprocessHistory } from '../services/reprocess';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
-// setNotificationHandler não é suportado no Expo Go SDK 53+; aplicado apenas em builds nativos
-try {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-} catch (_) {}
+// expo-notifications não é compatível com Expo Go SDK 53+
+// Será reativado no build de produção
+async function requestNotificationPermission(): Promise<boolean> { return false; }
+async function scheduleWorkoutReminder(_time: string) {}
 
 interface Props {
   profile: UserProfile | null;
@@ -50,28 +42,6 @@ const LEVELS = [
   { value: 'intermediate', label: 'Intermediário' },
   { value: 'advanced', label: 'Avançado' },
 ] as const;
-
-async function requestNotificationPermission(): Promise<boolean> {
-  const { status } = await Notifications.requestPermissionsAsync();
-  return status === 'granted';
-}
-
-async function scheduleWorkoutReminder(time: string) {
-  await Notifications.cancelAllScheduledNotificationsAsync();
-  const [hourStr, minuteStr] = time.split(':');
-  const hour = parseInt(hourStr, 10);
-  const minute = parseInt(minuteStr, 10);
-  if (isNaN(hour) || isNaN(minute)) return;
-
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Hora de treinar! 💪',
-      body: 'O AmigoFit tá te esperando. Você vai treinar hoje?',
-      sound: true,
-    },
-    trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour, minute },
-  });
-}
 
 function SectionHeader({ title }: { title: string }) {
   return <Text style={styles.sectionTitle}>{title}</Text>;
@@ -138,25 +108,10 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
   const [reprocessProgress, setReprocessProgress] = useState('');
 
   const handleToggleNotification = async (enabled: boolean) => {
-    if (enabled) {
-      const granted = await requestNotificationPermission();
-      if (!granted) {
-        Alert.alert('Permissão negada', 'Habilite as notificações nas configurações do iPhone para usar lembretes.');
-        return;
-      }
-      await scheduleWorkoutReminder(notifTime);
-    } else {
-      await Notifications.cancelAllScheduledNotificationsAsync();
-    }
-    setNotifEnabled(enabled);
+    Alert.alert('Em breve', 'Lembretes de treino estarão disponíveis na versão completa do app.');
   };
 
-  const handleTimeChange = async (time: string) => {
-    setNotifTime(time);
-    if (notifEnabled) {
-      await scheduleWorkoutReminder(time);
-    }
-  };
+  const handleTimeChange = (time: string) => setNotifTime(time);
 
   const handleReprocess = async () => {
     const key = await storage.getApiKey();
