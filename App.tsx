@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Text, View } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import ChatScreen from './src/screens/ChatScreen';
@@ -38,6 +38,65 @@ const Tab = createBottomTabNavigator();
 
 function TabIcon({ icon, focused }: { icon: string; focused: boolean }) {
   return <Text style={{ fontSize: focused ? 22 : 20, opacity: focused ? 1 : 0.5 }}>{icon}</Text>;
+}
+
+interface MainTabsProps {
+  profile: UserProfile;
+  authUser: { id: string; name: string; email: string };
+  setProfile: (p: UserProfile) => void;
+  onLogout: () => void;
+}
+
+function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+          height: 58 + insets.bottom,
+          paddingBottom: insets.bottom + 6,
+          paddingTop: 8,
+        },
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: '600' },
+      }}
+    >
+      <Tab.Screen
+        name="Chat"
+        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="🤖" focused={focused} /> }}
+      >
+        {() => <ChatScreen profile={profile} />}
+      </Tab.Screen>
+      <Tab.Screen
+        name="Diário"
+        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="📝" focused={focused} /> }}
+        component={DiaryScreen}
+      />
+      <Tab.Screen
+        name="Insights"
+        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="📈" focused={focused} /> }}
+        component={InsightsScreen}
+      />
+      <Tab.Screen
+        name="Perfil"
+        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="⚙️" focused={focused} /> }}
+      >
+        {() => (
+          <ProfileScreen
+            profile={profile}
+            authUser={authUser}
+            onProfileUpdate={setProfile}
+            onLogout={onLogout}
+          />
+        )}
+      </Tab.Screen>
+    </Tab.Navigator>
+  );
 }
 
 export default function App() {
@@ -150,50 +209,12 @@ export default function App() {
         <SafeAreaProvider>
           <NavigationContainer>
             <StatusBar style="light" />
-            <Tab.Navigator
-              screenOptions={{
-                headerShown: false,
-                tabBarStyle: {
-                  backgroundColor: colors.surface,
-                  borderTopColor: colors.border,
-                  height: 70,
-                  paddingBottom: 12,
-                },
-                tabBarActiveTintColor: colors.primary,
-                tabBarInactiveTintColor: colors.textMuted,
-                tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: '600' },
-              }}
-            >
-              <Tab.Screen
-                name="Chat"
-                options={{ tabBarIcon: ({ focused }) => <TabIcon icon="💬" focused={focused} /> }}
-              >
-                {() => <ChatScreen profile={profile} />}
-              </Tab.Screen>
-              <Tab.Screen
-                name="Diário"
-                options={{ tabBarIcon: ({ focused }) => <TabIcon icon="📋" focused={focused} /> }}
-                component={DiaryScreen}
-              />
-              <Tab.Screen
-                name="Insights"
-                options={{ tabBarIcon: ({ focused }) => <TabIcon icon="📊" focused={focused} /> }}
-                component={InsightsScreen}
-              />
-              <Tab.Screen
-                name="Perfil"
-                options={{ tabBarIcon: ({ focused }) => <TabIcon icon="👤" focused={focused} /> }}
-              >
-                {() => (
-                  <ProfileScreen
-                    profile={profile}
-                    authUser={authUser}
-                    onProfileUpdate={setProfile}
-                    onLogout={handleLogout}
-                  />
-                )}
-              </Tab.Screen>
-            </Tab.Navigator>
+            <MainTabs
+              profile={profile!}
+              authUser={authUser!}
+              setProfile={setProfile}
+              onLogout={handleLogout}
+            />
           </NavigationContainer>
         </SafeAreaProvider>
       </GestureHandlerRootView>
