@@ -18,13 +18,16 @@ import { storage } from '../services/storage';
 import { reprocessHistory } from '../services/reprocess';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+// setNotificationHandler não é suportado no Expo Go SDK 53+; aplicado apenas em builds nativos
+try {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+} catch (_) {}
 
 interface Props {
   profile: UserProfile | null;

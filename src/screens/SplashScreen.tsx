@@ -57,7 +57,9 @@ export default function SplashScreen({ onComplete }: Props) {
     });
 
     const exitTimer = setTimeout(() => {
-      Animated.timing(screenOpacity, { toValue: 0, duration: 450, useNativeDriver: true }).start(() => onComplete());
+      Animated.timing(screenOpacity, { toValue: 0, duration: 450, useNativeDriver: true }).start();
+      // Não depende do callback da animação — ele pode não disparar no Android com New Architecture
+      setTimeout(onComplete, 460);
     }, 2600);
 
     return () => clearTimeout(exitTimer);

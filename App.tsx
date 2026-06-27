@@ -50,15 +50,23 @@ export default function App() {
   const [showAuth, setShowAuth]     = useState(false);
 
   useEffect(() => {
+    // Garante que authReady seja true mesmo se o fetch travar ou lançar erro
+    const fallback = setTimeout(() => setAuthReady(true), 6000);
     (async () => {
-      const [token, user] = await Promise.all([getToken(), getStoredUser()]);
-      if (token && user) {
-        setAuthUser(user);
-        const [p, k] = await Promise.all([storage.getProfile(), storage.getApiKey()]);
-        setProfile(p);
-        setApiKey(k);
+      try {
+        const [token, user] = await Promise.all([getToken(), getStoredUser()]);
+        if (token && user) {
+          setAuthUser(user);
+          const [p, k] = await Promise.all([storage.getProfile(), storage.getApiKey()]);
+          setProfile(p);
+          setApiKey(k);
+        }
+      } catch (e) {
+        console.warn('Auth init error:', e);
+      } finally {
+        clearTimeout(fallback);
+        setAuthReady(true);
       }
-      setAuthReady(true);
     })();
   }, []);
 
