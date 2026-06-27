@@ -68,7 +68,7 @@ function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
     >
       <Tab.Screen
         name="Chat"
-        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="🤖" focused={focused} /> }}
+        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="💬" focused={focused} /> }}
       >
         {() => <ChatScreen profile={profile} />}
       </Tab.Screen>
