@@ -163,6 +163,7 @@ export default function ChatScreen({ profile }: Props) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header fica fora do KAV para não subir junto com o teclado */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.headerDot} />
@@ -184,48 +185,50 @@ export default function ChatScreen({ profile }: Props) {
         </View>
       </View>
 
-      <FlatList
-        ref={listRef}
-        data={messages}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <MessageBubble message={item} />}
-        style={styles.list}
-        contentContainerStyle={styles.messageList}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive"
-        ListFooterComponent={
-          isLoading ? (
-            <View style={styles.typingIndicator}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>AF</Text>
-              </View>
-              <View style={styles.bubbleAI}>
-                <ActivityIndicator size="small" color={colors.primary} />
-              </View>
-            </View>
-          ) : null
-        }
-      />
-
-      {messages.length <= 1 && (
-        <View style={styles.quickPrompts}>
-          {quickPrompts.map((prompt) => (
-            <TouchableOpacity
-              key={prompt}
-              style={styles.quickPromptBtn}
-              onPress={() => sendMessage(prompt)}
-            >
-              <Text style={styles.quickPromptText}>{prompt}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-
+      {/* KAV engloba lista + input → input sobe junto com o teclado no Android */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
+        <FlatList
+          ref={listRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => <MessageBubble message={item} />}
+          style={styles.list}
+          contentContainerStyle={styles.messageList}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          ListFooterComponent={
+            isLoading ? (
+              <View style={styles.typingIndicator}>
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>AF</Text>
+                </View>
+                <View style={styles.bubbleAI}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                </View>
+              </View>
+            ) : null
+          }
+        />
+
+        {messages.length <= 1 && (
+          <View style={styles.quickPrompts}>
+            {quickPrompts.map((prompt) => (
+              <TouchableOpacity
+                key={prompt}
+                style={styles.quickPromptBtn}
+                onPress={() => sendMessage(prompt)}
+              >
+                <Text style={styles.quickPromptText}>{prompt}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {pendingImage && (
           <View style={styles.imagePreviewRow}>
             <Image source={{ uri: pendingImage.uri }} style={styles.imagePreview} resizeMode="cover" />
@@ -234,6 +237,7 @@ export default function ChatScreen({ profile }: Props) {
             </TouchableOpacity>
           </View>
         )}
+
         <View style={styles.inputRow}>
           <TouchableOpacity style={styles.imageBtn} onPress={handlePickImage} disabled={isLoading}>
             <Text style={styles.imageBtnIcon}>🖼</Text>
