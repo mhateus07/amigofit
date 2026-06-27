@@ -16,10 +16,6 @@ import { storage } from '../services/storage';
 import { reprocessHistory } from '../services/reprocess';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
-// expo-notifications não é compatível com Expo Go SDK 53+
-// Será reativado no build de produção
-async function requestNotificationPermission(): Promise<boolean> { return false; }
-async function scheduleWorkoutReminder(_time: string) {}
 
 interface Props {
   profile: UserProfile | null;
@@ -98,20 +94,10 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
   const [weeklyWorkoutGoal, setWeeklyWorkoutGoal] = useState(profile?.weeklyWorkoutGoal ?? 3);
   const [sleepGoal, setSleepGoal] = useState(profile?.sleepGoal ?? 8);
 
-  // Notificações
-  const [notifEnabled, setNotifEnabled] = useState(profile?.notificationEnabled ?? false);
-  const [notifTime, setNotifTime] = useState(profile?.notificationTime ?? '07:00');
-
   const [apiKey, setApiKey] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState('');
-
-  const handleToggleNotification = async (enabled: boolean) => {
-    Alert.alert('Em breve', 'Lembretes de treino estarão disponíveis na versão completa do app.');
-  };
-
-  const handleTimeChange = (time: string) => setNotifTime(time);
 
   const handleReprocess = async () => {
     const key = await storage.getApiKey();
@@ -161,8 +147,8 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
       height: height ? parseInt(height, 10) : undefined,
       weeklyWorkoutGoal,
       sleepGoal,
-      notificationEnabled: notifEnabled,
-      notificationTime: notifTime,
+      notificationEnabled: false,
+      notificationTime: '07:00',
       onboardingComplete: true,
     };
     await storage.saveProfile(updated);
@@ -356,32 +342,12 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onAp
         {/* Notificações */}
         <View style={styles.section}>
           <SectionHeader title="Lembrete de treino" />
-          <View style={styles.notifRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.notifLabel}>Receber lembrete diário</Text>
-              <Text style={styles.notifDesc}>Notificação no horário escolhido</Text>
-            </View>
-            <Switch
-              value={notifEnabled}
-              onValueChange={handleToggleNotification}
-              trackColor={{ false: colors.border, true: colors.primary }}
-              thumbColor={notifEnabled ? '#000' : '#888'}
-            />
+          <Text style={styles.sectionDesc}>
+            Lembretes diários estarão disponíveis na versão completa do app.
+          </Text>
+          <View style={styles.comingSoonBadge}>
+            <Text style={styles.comingSoonText}>Em breve</Text>
           </View>
-          {notifEnabled && (
-            <View style={styles.timeRow}>
-              <Text style={styles.label}>Horário (HH:MM)</Text>
-              <TextInput
-                style={[styles.input, styles.timeInput]}
-                value={notifTime}
-                onChangeText={handleTimeChange}
-                placeholder="07:00"
-                placeholderTextColor={colors.textMuted}
-                keyboardType="numbers-and-punctuation"
-                maxLength={5}
-              />
-            </View>
-          )}
         </View>
 
         {/* Botão salvar */}
@@ -506,12 +472,17 @@ const styles = StyleSheet.create({
   counterValue: { color: colors.text, fontSize: fontSize.lg, fontWeight: '700', minWidth: 60, textAlign: 'center' },
   counterUnit: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '400' },
 
-  // Notificações
-  notifRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  notifLabel: { color: colors.text, fontSize: fontSize.md, fontWeight: '600' },
-  notifDesc: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
-  timeRow: { marginTop: spacing.md },
-  timeInput: { marginTop: 0 },
+  // Notificações (em breve)
+  comingSoonBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  comingSoonText: { color: colors.textMuted, fontSize: fontSize.sm, fontWeight: '600' },
 
   // Save
   saveBtn: {
