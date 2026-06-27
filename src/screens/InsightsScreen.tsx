@@ -60,6 +60,7 @@ function generateInsights(data: ExtractedData[]): Insight[] {
     });
   }
 
+  // ── Correlação: refeição tardia → mal-estar no dia seguinte ──
   const nutrition = last30.filter((d) => d.category === 'nutrition');
   if (nutrition.length >= 3) {
     const lateNight = nutrition.filter((d) => {
@@ -67,13 +68,32 @@ function generateInsights(data: ExtractedData[]): Insight[] {
       return h >= 21 || h <= 2;
     });
     if (lateNight.length >= 2) {
-      insights.push({
-        icon: '🌮',
-        title: `${lateNight.length}x refeições tarde da noite`,
-        description: 'Comer depois das 21h dificulta a digestão durante o sono e pode afetar a qualidade da recuperação.',
-        color: colors.warning,
-        severity: 'warning',
+      const lateWithNextDayIssue = lateNight.filter((meal) => {
+        const mealHour = new Date(meal.timestamp).getHours();
+        const nextDayStart = meal.timestamp + (24 - mealHour) * 3600000;
+        const nextDayEnd = nextDayStart + 86400000;
+        return last30.some(
+          (d) => d.category === 'health' && d.timestamp >= nextDayStart && d.timestamp <= nextDayEnd
+        );
       });
+
+      if (lateWithNextDayIssue.length >= 2 && lateWithNextDayIssue.length / lateNight.length >= 0.4) {
+        insights.push({
+          icon: '🌮',
+          title: 'Jantar tarde afeta como você se sente',
+          description: `Em ${lateWithNextDayIssue.length} de ${lateNight.length} noites com refeição depois das 21h, você relatou desconforto no dia seguinte. Considere antecipar o jantar.`,
+          color: colors.warning,
+          severity: 'warning',
+        });
+      } else {
+        insights.push({
+          icon: '🌮',
+          title: `${lateNight.length}x refeições tarde da noite`,
+          description: 'Comer depois das 21h dificulta a digestão e pode afetar a qualidade do sono e da recuperação.',
+          color: colors.warning,
+          severity: 'warning',
+        });
+      }
     }
   }
 
@@ -91,6 +111,53 @@ function generateInsights(data: ExtractedData[]): Insight[] {
   const workout = last30.filter((d) => d.category === 'workout');
   if (workout.length >= 4) {
     insights.push({ icon: '🏋️', title: `${workout.length} treinos registrados (30d)`, description: `Média de ${(workout.length / 4.3).toFixed(1)} treinos por semana. ${workout.length >= 12 ? 'Consistência excelente!' : workout.length >= 8 ? 'Bom ritmo!' : 'Tente aumentar a frequência.'}`, color: workout.length >= 12 ? colors.primary : colors.warning, severity: workout.length >= 8 ? 'positive' : 'neutral' });
+  }
+
+  // ── Correlação: sono × performance ──────────────────────────
+  if (sleep.length >= 2 && performance.length >= 2) {
+    const sleepByDay: Record<string, number> = {};
+    sleep.forEach((d) => {
+      const h = extractHours(d.value);
+      if (h) sleepByDay[format(startOfDay(d.timestamp), 'yyyy-MM-dd')] = h;
+    });
+
+    const perfByDay: Record<string, { pos: number; neg: number }> = {};
+    performance.forEach((d) => {
+      const key = format(startOfDay(d.timestamp), 'yyyy-MM-dd');
+      if (!perfByDay[key]) perfByDay[key] = { pos: 0, neg: 0 };
+      if (/aumentei|bati|consegui|melhor|record/i.test(d.value + d.label)) perfByDay[key].pos++;
+      if (/não consegui|nao consegui|cansad|fraco|ruim|mal/i.test(d.value + d.label)) perfByDay[key].neg++;
+    });
+
+    const daysWithBoth = Object.keys(sleepByDay).filter((k) => perfByDay[k]);
+    if (daysWithBoth.length >= 3) {
+      const poorSleepDays = daysWithBoth.filter((k) => sleepByDay[k] < 7);
+      const goodSleepDays = daysWithBoth.filter((k) => sleepByDay[k] >= 7);
+      const poorNegRate = poorSleepDays.length > 0
+        ? poorSleepDays.filter((k) => perfByDay[k].neg > perfByDay[k].pos).length / poorSleepDays.length
+        : 0;
+      const goodPosRate = goodSleepDays.length > 0
+        ? goodSleepDays.filter((k) => perfByDay[k].pos > perfByDay[k].neg).length / goodSleepDays.length
+        : 0;
+
+      if (poorSleepDays.length >= 2 && poorNegRate >= 0.5) {
+        insights.push({
+          icon: '🔗',
+          title: 'Sono baixo = treino pior',
+          description: `Com menos de 7h, ${Math.round(poorNegRate * 100)}% das suas sessões foram negativas. Com sono adequado, ${Math.round(goodPosRate * 100)}% foram positivas. Dormir bem é parte do treino.`,
+          color: colors.warning,
+          severity: 'warning',
+        });
+      } else if (goodSleepDays.length >= 2 && goodPosRate >= 0.6) {
+        insights.push({
+          icon: '🔗',
+          title: 'Sono potencializa seu treino',
+          description: `Quando você dorme 7h+, ${Math.round(goodPosRate * 100)}% das suas sessões são positivas. Continue priorizando o sono — os dados mostram que faz diferença real.`,
+          color: colors.primary,
+          severity: 'positive',
+        });
+      }
+    }
   }
 
   return insights;
@@ -235,6 +302,51 @@ function CategoryRing({ data }: { data: ExtractedData[] }) {
   );
 }
 
+// ── Gráfico dias da semana ────────────────────────────────
+function DayOfWeekChart({ data }: { data: ExtractedData[] }) {
+  const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const counts = new Array(7).fill(0);
+  data.filter((d) => d.category === 'workout').forEach((d) => {
+    counts[new Date(d.timestamp).getDay()]++;
+  });
+  const maxCount = Math.max(...counts, 1);
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+
+  const bestDay = counts.indexOf(Math.max(...counts));
+
+  return (
+    <View style={styles.weekdayCard}>
+      <Text style={styles.sectionLabel}>Treinos por dia da semana</Text>
+      <View style={styles.weekdayBars}>
+        {days.map((day, i) => (
+          <View key={i} style={styles.weekdayCol}>
+            <Text style={styles.weekdayCount}>{counts[i] > 0 ? counts[i] : ''}</Text>
+            <View style={styles.weekdayTrack}>
+              <View
+                style={[
+                  styles.weekdayFill,
+                  {
+                    height: `${(counts[i] / maxCount) * 100}%`,
+                    backgroundColor: i === bestDay ? colors.primary : counts[i] > 0 ? '#005C26' : colors.border,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={[styles.weekdayLabel, i === bestDay && { color: colors.primary, fontWeight: '700' }]}>
+              {day}
+            </Text>
+          </View>
+        ))}
+      </View>
+      <Text style={styles.weekdayCaption}>
+        Dia mais ativo:{' '}
+        <Text style={{ color: colors.primary, fontWeight: '700' }}>{days[bestDay]}</Text>
+      </Text>
+    </View>
+  );
+}
+
 // ── Metas ──────────────────────────────────────────────────
 function GoalsSection({ data, profile }: { data: ExtractedData[]; profile: UserProfile | null }) {
   const weeklyGoal = profile?.weeklyWorkoutGoal ?? 3;
@@ -375,6 +487,7 @@ export default function InsightsScreen() {
     | { type: 'goals' }
     | { type: 'sleepChart' }
     | { type: 'weekly' }
+    | { type: 'dayOfWeek' }
     | { type: 'categories' }
     | { type: 'sectionTitle'; title: string }
     | { type: 'insight'; insight: Insight }
@@ -385,6 +498,7 @@ export default function InsightsScreen() {
     { type: 'goals' },
     { type: 'sleepChart' },
     { type: 'weekly' },
+    { type: 'dayOfWeek' },
     { type: 'categories' },
     { type: 'sectionTitle', title: `${insights.length} insight${insights.length !== 1 ? 's' : ''} identificado${insights.length !== 1 ? 's' : ''}` },
     ...insights.map((insight) => ({ type: 'insight' as const, insight })),
@@ -414,6 +528,7 @@ export default function InsightsScreen() {
             </View>
           );
           if (item.type === 'weekly') return <WeeklyChart data={data} />;
+          if (item.type === 'dayOfWeek') return <DayOfWeekChart data={data} />;
           if (item.type === 'categories') return <CategoryRing data={data} />;
           if (item.type === 'sectionTitle') return <Text style={styles.sectionTitle}>{item.title}</Text>;
           if (item.type === 'insight') return <InsightCard insight={item.insight} />;
@@ -471,6 +586,16 @@ const styles = StyleSheet.create({
   weeklyBarTrack: { width: '100%', height: 60, justifyContent: 'flex-end', backgroundColor: colors.border, borderRadius: radius.sm, overflow: 'hidden' },
   weeklyBarFill:  { width: '100%', borderRadius: radius.sm },
   weeklyBarLabel: { color: colors.textSecondary, fontSize: 10, textTransform: 'capitalize' },
+
+  // Day of week
+  weekdayCard:    { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md },
+  weekdayBars:    { flexDirection: 'row', gap: spacing.xs, height: 90, alignItems: 'flex-end', marginBottom: spacing.sm },
+  weekdayCol:     { flex: 1, alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' },
+  weekdayCount:   { color: colors.textMuted, fontSize: 10 },
+  weekdayTrack:   { width: '100%', height: 64, justifyContent: 'flex-end', backgroundColor: colors.border, borderRadius: radius.sm, overflow: 'hidden' },
+  weekdayFill:    { width: '100%', borderRadius: radius.sm },
+  weekdayLabel:   { color: colors.textSecondary, fontSize: 10 },
+  weekdayCaption: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs },
 
   // Category rings
   ringCard:     { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md },

@@ -27,6 +27,7 @@ services:
       DB_NAME: amigofit
       DB_USER: amigofit
       DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
       PORT: 3001
     depends_on:
       db:
