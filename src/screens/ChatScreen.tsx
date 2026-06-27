@@ -12,6 +12,7 @@ import {
   Image,
   Alert,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -69,6 +70,19 @@ function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user';
   const time = format(message.timestamp, 'HH:mm', { locale: ptBR });
 
+  const handleLongPress = () => {
+    const text = message.content;
+    Alert.alert('Mensagem', undefined, [
+      {
+        text: 'Copiar',
+        onPress: async () => {
+          await Clipboard.setStringAsync(text);
+        },
+      },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
+  };
+
   return (
     <View style={[styles.bubbleRow, isUser ? styles.bubbleRowUser : styles.bubbleRowAI]}>
       {!isUser && (
@@ -76,7 +90,12 @@ function MessageBubble({ message }: { message: Message }) {
           <Text style={styles.avatarText}>AF</Text>
         </View>
       )}
-      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAI]}>
+      <TouchableOpacity
+        style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAI]}
+        onLongPress={handleLongPress}
+        activeOpacity={1}
+        delayLongPress={400}
+      >
         {message.imageUri && (
           <Image source={{ uri: message.imageUri }} style={styles.bubbleImage} resizeMode="cover" />
         )}
@@ -93,7 +112,7 @@ function MessageBubble({ message }: { message: Message }) {
             <Text style={styles.dataTagText}>+{message.extractedData.length} dado(s) salvo(s)</Text>
           </View>
         )}
-      </View>
+      </TouchableOpacity>
     </View>
   );
 }

@@ -210,7 +210,9 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
         {/* Configuração da IA */}
         <View style={styles.section}>
           <SectionHeader title="Configuração da IA" />
-          <Text style={styles.sectionDesc}>Escolha o provedor e configure sua chave de API.</Text>
+          <Text style={styles.sectionDesc}>
+            Toque para trocar de provedor. Segure para remover a chave.
+          </Text>
 
           {/* Provider selector */}
           <View style={styles.providerGrid}>
@@ -221,15 +223,45 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
               return (
                 <TouchableOpacity
                   key={p}
-                  style={[styles.providerCard, isActive && styles.providerCardActive]}
+                  style={[styles.providerCard, isActive && styles.providerCardActive, !hasKey && styles.providerCardNoKey]}
                   onPress={() => handleProviderChange(p)}
+                  onLongPress={() => {
+                    if (!providerKeys[p]) return;
+                    Alert.alert(
+                      `Remover chave — ${info.label}`,
+                      'Isso vai desativar este provedor.',
+                      [
+                        { text: 'Cancelar', style: 'cancel' },
+                        {
+                          text: 'Remover',
+                          style: 'destructive',
+                          onPress: async () => {
+                            await storage.saveApiKey('', p);
+                            setProviderKeys(prev => ({ ...prev, [p]: '' }));
+                            if (provider === p) {
+                              const next = PROVIDERS.find(x => x !== p && !!providerKeys[x]);
+                              const fallback = next || 'anthropic';
+                              setProvider(fallback);
+                              await saveProvider(fallback);
+                            }
+                          },
+                        },
+                      ]
+                    );
+                  }}
                   activeOpacity={0.75}
+                  delayLongPress={500}
                 >
                   <Text style={styles.providerIcon}>{info.icon}</Text>
                   <Text style={[styles.providerLabel, isActive && styles.providerLabelActive]}>
                     {info.label}
                   </Text>
-                  {hasKey && <Text style={styles.providerCheck}>✓</Text>}
+                  {isActive && hasKey
+                    ? <Text style={styles.providerActive}>Em uso</Text>
+                    : hasKey
+                    ? <Text style={styles.providerCheck}>✓</Text>
+                    : <Text style={styles.providerNoKey}>Sem chave</Text>
+                  }
                 </TouchableOpacity>
               );
             })}
@@ -414,10 +446,13 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: colors.border, gap: 4,
   },
   providerCardActive: { borderColor: colors.primary, backgroundColor: 'rgba(0,200,83,0.06)' },
+  providerCardNoKey: { opacity: 0.55 },
   providerIcon: { fontSize: 20 },
   providerLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
   providerLabelActive: { color: colors.primary },
   providerCheck: { color: colors.primary, fontSize: 10, fontWeight: '700' },
+  providerActive: { color: colors.primary, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  providerNoKey: { color: colors.textMuted, fontSize: 9, fontWeight: '500' },
   providerHint: { color: colors.textMuted, fontSize: fontSize.xs, marginBottom: spacing.sm },
 
   // API key
