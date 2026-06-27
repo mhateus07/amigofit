@@ -1,9 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Message, UserProfile, ExtractedData } from '../types';
 
-// Backend local (Docker). No emulador Android, o localhost do PC é acessível via 10.0.2.2.
-// Produção: 'http://31.97.160.94:3001'
-export const API_BASE = 'http://10.0.2.2:3001';
+export const API_BASE = 'http://173.212.208.109:3001';
 
 const LOCAL_KEYS = {
   TOKEN: 'amigofit_token',

@@ -1,11 +1,14 @@
 import React, { useEffect, useRef } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Dimensions, Animated, Image,
+  View, Text, TouchableOpacity, StyleSheet, Dimensions, Animated, Image, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
+
+// Hero menor em telas compactas (S24 tem ~780dp de altura vs ~956pt do iPhone 17 Pro Max)
+const HERO_HEIGHT = height < 850 ? 220 : 300;
 
 interface Props {
   onLogin: () => void;
@@ -36,7 +39,6 @@ const FEATURES = [
   },
 ];
 
-
 export default function WelcomeScreen({ onLogin, onRegister }: Props) {
   const heroScale   = useRef(new Animated.Value(0.85)).current;
   const heroOpacity = useRef(new Animated.Value(0)).current;
@@ -56,50 +58,58 @@ export default function WelcomeScreen({ onLogin, onRegister }: Props) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {/* ── Hero ── */}
-      <Animated.View style={[styles.hero, { transform: [{ scale: heroScale }], opacity: heroOpacity }]}>
-        <Image
-          source={require('../../assets/mascot.png')}
-          style={styles.mascot}
-          resizeMode="contain"
-        />
-      </Animated.View>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
+        {/* ── Hero ── */}
+        <Animated.View
+          style={[styles.hero, { transform: [{ scale: heroScale }], opacity: heroOpacity }]}
+          pointerEvents="none"
+        >
+          <Image
+            source={require('../../assets/mascot.png')}
+            style={styles.mascot}
+            resizeMode="contain"
+          />
+        </Animated.View>
 
-      {/* ── Body ── */}
-      <Animated.View style={[styles.body, { opacity: bodyOpacity, transform: [{ translateY: bodyY }] }]}>
-        <Text style={styles.brand}>AmigoFit</Text>
-        <Text style={styles.headline}>Seu personal trainer{'\n'}com inteligência artificial</Text>
+        {/* ── Body ── */}
+        <Animated.View style={[styles.body, { opacity: bodyOpacity, transform: [{ translateY: bodyY }] }]}>
+          <Text style={styles.brand}>AmigoFit</Text>
+          <Text style={styles.headline}>Seu personal trainer{'\n'}com inteligência artificial</Text>
 
-        <View style={styles.featureList}>
-          {FEATURES.map((f) => (
-            <View key={f.title} style={styles.featureRow}>
-              <View style={[styles.featureIconBox, { backgroundColor: f.bg }]}>
-                <Text style={styles.featureIconText}>{f.icon}</Text>
+          <View style={styles.featureList}>
+            {FEATURES.map((f) => (
+              <View key={f.title} style={styles.featureRow}>
+                <View style={[styles.featureIconBox, { backgroundColor: f.bg }]}>
+                  <Text style={styles.featureIconText}>{f.icon}</Text>
+                </View>
+                <View style={styles.featureTextBlock}>
+                  <Text style={[styles.featureTitle, { color: f.color }]}>{f.title}</Text>
+                  <Text style={styles.featureDesc}>{f.desc}</Text>
+                </View>
               </View>
-              <View style={styles.featureTextBlock}>
-                <Text style={[styles.featureTitle, { color: f.color }]}>{f.title}</Text>
-                <Text style={styles.featureDesc}>{f.desc}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
+            ))}
+          </View>
 
-        <TouchableOpacity style={styles.primaryBtn} onPress={onRegister} activeOpacity={0.85}>
-          <Text style={styles.primaryBtnText}>Começar agora — é grátis 💪</Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.primaryBtn} onPress={onRegister} activeOpacity={0.85}>
+            <Text style={styles.primaryBtnText}>Começar agora — é grátis 💪</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity style={styles.secondaryBtn} onPress={onLogin} activeOpacity={0.7}>
-          <Text style={styles.secondaryBtnText}>Já tenho uma conta  →</Text>
-        </TouchableOpacity>
-      </Animated.View>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={onLogin} activeOpacity={0.7}>
+            <Text style={styles.secondaryBtnText}>Já tenho uma conta  →</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-const HERO_HEIGHT = 300;
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  scroll:    { flexGrow: 1 },
 
   hero: {
     height: HERO_HEIGHT,
@@ -108,12 +118,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   mascot: {
-    width: width * 1.25,
-    height: HERO_HEIGHT * 1.25,
+    width: width * 1.1,
+    height: HERO_HEIGHT * 1.1,
   },
 
   body: {
-    flex: 1,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.lg,
@@ -128,13 +137,13 @@ const styles = StyleSheet.create({
   },
   headline: {
     color: colors.text,
-    fontSize: fontSize.xxl + 2,
+    fontSize: fontSize.xxl,
     fontWeight: '800',
-    lineHeight: 34,
+    lineHeight: 32,
     marginBottom: spacing.lg,
   },
 
-  featureList: { gap: spacing.sm, marginBottom: spacing.xl },
+  featureList: { gap: spacing.sm, marginBottom: spacing.lg },
   featureRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -167,8 +176,9 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 6 },
     elevation: 10,
+    marginBottom: spacing.xs,
   },
-  primaryBtnText: { color: '#000', fontSize: fontSize.md, fontWeight: '800' },
-  secondaryBtn:   { alignItems: 'center', paddingVertical: spacing.md },
+  primaryBtnText:   { color: '#000', fontSize: fontSize.md, fontWeight: '800' },
+  secondaryBtn:     { alignItems: 'center', paddingVertical: spacing.md },
   secondaryBtnText: { color: colors.textSecondary, fontSize: fontSize.md },
 });
