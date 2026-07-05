@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const Anthropic = require('@anthropic-ai/sdk');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
@@ -10,9 +10,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 if (!process.env.JWT_SECRET) {
-  console.warn('⚠️  AVISO: JWT_SECRET não definido. Defina a variável de ambiente JWT_SECRET em produção!');
+  console.error('JWT_SECRET não definido. Configure a variável de ambiente JWT_SECRET antes de iniciar o servidor.');
+  process.exit(1);
 }
-const JWT_SECRET = process.env.JWT_SECRET || 'amigofit_dev_secret_nao_usar_em_producao';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // ── Database ──────────────────────────────────────────────
 const pool = new Pool({
@@ -67,9 +68,32 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Limita chamadas às APIs de IA (pagas) por usuário autenticado, não por IP,
+// já que requireAuth roda antes e popula req.userId.
+const aiLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  message: { error: 'Muitas requisições de IA. Aguarde alguns minutos e tente novamente.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req.ip),
+});
+
 // ── Middleware ────────────────────────────────────────────
+// O app mobile (React Native) não envia header Origin, então não é afetado pelo CORS.
+// Isso protege apenas contra acesso via browser (build web / react-native-web) de domínios não autorizados.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:8081,http://localhost:19006')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: '*',
+  origin(origin, callback) {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('Origem não permitida pelo CORS'));
+  },
   allowedHeaders: ['Content-Type', 'x-api-key', 'x-provider', 'Authorization'],
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   preflightContinue: false,
@@ -350,10 +374,23 @@ app.post('/api/messages', requireAuth, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM messages WHERE user_id=$1', [req.userId]);
+    // O cliente sempre envia a lista completa e atual de mensagens. Em vez de apagar
+    // tudo e reinserir (reescreve a tabela inteira a cada mensagem nova), removemos só
+    // as que não estão mais na lista (ex: "Limpar chat") e fazemos upsert do resto.
+    const ids = messages.map((m) => m.id);
+    await client.query(
+      'DELETE FROM messages WHERE user_id=$1 AND NOT (id = ANY($2::text[]))',
+      [req.userId, ids]
+    );
     for (const m of messages) {
       await client.query(
-        'INSERT INTO messages (id, user_id, role, content, extracted_data, timestamp) VALUES ($1,$2,$3,$4,$5,$6)',
+        `INSERT INTO messages (id, user_id, role, content, extracted_data, timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (id) DO UPDATE SET
+           role = EXCLUDED.role,
+           content = EXCLUDED.content,
+           extracted_data = EXCLUDED.extracted_data,
+           timestamp = EXCLUDED.timestamp`,
         [m.id, req.userId, m.role, m.content, JSON.stringify(m.extractedData || null), m.timestamp]
       );
     }
@@ -390,7 +427,7 @@ app.post('/api/extracted-data', requireAuth, async (req, res) => {
 });
 
 // ── AI: Chat ──────────────────────────────────────────────
-app.post('/api/chat', requireAuth, async (req, res) => {
+app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
   const config = getProviderConfig(req, res);
   if (!config) return;
   const { messages, systemPrompt } = req.body;
@@ -404,7 +441,7 @@ app.post('/api/chat', requireAuth, async (req, res) => {
 });
 
 // ── AI: Extract ───────────────────────────────────────────
-app.post('/api/extract', requireAuth, async (req, res) => {
+app.post('/api/extract', requireAuth, aiLimiter, async (req, res) => {
   const config = getProviderConfig(req, res);
   if (!config) return;
   const { message } = req.body;

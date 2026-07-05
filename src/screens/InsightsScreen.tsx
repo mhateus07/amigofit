@@ -9,6 +9,7 @@ import { ptBR } from 'date-fns/locale';
 import { ExtractedData, UserProfile } from '../types';
 import { storage } from '../services/storage';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
+import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../constants/categories';
 
 const { width } = Dimensions.get('window');
 const CHART_WIDTH = width - spacing.md * 2 - spacing.md * 2; // screen - list padding - card padding
@@ -269,21 +270,14 @@ function WeeklyChart({ data }: { data: ExtractedData[] }) {
 
 // ── Rings de categoria ─────────────────────────────────────
 function CategoryRing({ data }: { data: ExtractedData[] }) {
-  const categories = [
-    { key: 'sleep', icon: '🌙', label: 'Sono', color: '#9C7FE8' },
-    { key: 'nutrition', icon: '🥗', label: 'Alimentação', color: '#FF7B7B' },
-    { key: 'performance', icon: '🏋️', label: 'Performance', color: '#00C853' },
-    { key: 'mood', icon: '😊', label: 'Humor', color: '#FFB300' },
-    { key: 'health', icon: '❤️', label: 'Saúde', color: '#FF4081' },
-    { key: 'workout', icon: '🔥', label: 'Treino', color: '#FF7043' },
-  ];
   const total = data.length;
 
   return (
     <View style={styles.ringCard}>
       <Text style={styles.sectionLabel}>Por categoria</Text>
       <View style={styles.ringGrid}>
-        {categories.map((c) => {
+        {CATEGORY_KEYS.map((key) => {
+          const c = { key, ...CATEGORY_CONFIG[key] };
           const count = data.filter((d) => d.category === c.key).length;
           const pct = total > 0 ? Math.round((count / total) * 100) : 0;
           return (

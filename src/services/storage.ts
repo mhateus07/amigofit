@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Message, UserProfile, ExtractedData, AIProvider } from '../types';
 
-export const API_BASE = 'http://173.212.208.109:3001';
+export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://173.212.208.109:3001';
 
 const LOCAL_KEYS = {
   TOKEN: 'amigofit_token',
