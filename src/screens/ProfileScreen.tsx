@@ -8,11 +8,13 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UserProfile, AIProvider } from '../types';
 import { storage, getProvider, saveProvider } from '../services/storage';
 import { reprocessHistory } from '../services/reprocess';
+import { syncHealthConnect, getLastSyncTime } from '../services/healthConnect';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
 const PROVIDER_INFO: Record<AIProvider, { label: string; icon: string; prefix: string; hint: string; model: string }> = {
@@ -89,6 +91,8 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
 
   const [reprocessing, setReprocessing] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState('');
+  const [healthSyncing, setHealthSyncing] = useState(false);
+  const [healthLastSync, setHealthLastSync] = useState<Date | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -101,6 +105,10 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
         storage.getApiKey('groq'),
       ]);
       setProviderKeys({ anthropic: k1 ?? '', openai: k2 ?? '', gemini: k3 ?? '', groq: k4 ?? '' });
+      if (Platform.OS === 'android') {
+        const lastSync = await getLastSyncTime();
+        setHealthLastSync(lastSync);
+      }
     })();
   }, []);
 
@@ -149,6 +157,27 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
     } finally {
       setReprocessing(false);
       setReprocessProgress('');
+    }
+  };
+
+  const handleHealthSync = async () => {
+    setHealthSyncing(true);
+    try {
+      const result = await syncHealthConnect();
+      if (result.error) {
+        Alert.alert('Health Connect', result.error);
+      } else {
+        const msg = result.synced > 0
+          ? `${result.synced} registro(s) importado(s) para o Diário e Insights.`
+          : 'Nenhum dado novo encontrado desde a última sincronização.';
+        Alert.alert('Sincronizado!', msg);
+        const lastSync = await getLastSyncTime();
+        setHealthLastSync(lastSync);
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível sincronizar com o Health Connect.');
+    } finally {
+      setHealthSyncing(false);
     }
   };
 
@@ -394,6 +423,42 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
           </View>
         </View>
 
+        {/* Samsung Health / Google Fit */}
+        {Platform.OS === 'android' && (
+          <View style={styles.section}>
+            <SectionHeader title="Samsung Health / Google Fit" />
+            <Text style={styles.sectionDesc}>
+              Importa sono, passos, treinos e batimentos diretamente para o Diário e Insights, sem precisar digitar nada.
+            </Text>
+            {healthLastSync && (
+              <Text style={styles.lastSyncText}>
+                Última sync: {healthLastSync.toLocaleString('pt-BR', {
+                  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                })}
+              </Text>
+            )}
+            <TouchableOpacity
+              style={[styles.healthSyncBtn, healthSyncing && styles.reprocessBtnDisabled]}
+              onPress={handleHealthSync}
+              disabled={healthSyncing}
+            >
+              {healthSyncing ? (
+                <View style={styles.reprocessRow}>
+                  <ActivityIndicator size="small" color="#000" />
+                  <Text style={styles.healthSyncBtnText}>Sincronizando...</Text>
+                </View>
+              ) : (
+                <Text style={styles.healthSyncBtnText}>
+                  {healthLastSync ? 'Sincronizar agora' : 'Conectar e sincronizar'}
+                </Text>
+              )}
+            </TouchableOpacity>
+            <Text style={styles.healthNote}>
+              Requer build nativo (expo run:android). Compatível com Samsung Health, Google Fit e qualquer app que sincronize com Health Connect.
+            </Text>
+          </View>
+        )}
+
         {/* Botão salvar */}
         <TouchableOpacity style={styles.saveBtn} onPress={saveProfile}>
           <Text style={styles.saveBtnText}>Salvar perfil</Text>
@@ -536,6 +601,18 @@ const styles = StyleSheet.create({
   reprocessBtnDisabled: { borderColor: colors.border, opacity: 0.6 },
   reprocessBtnText: { color: colors.primary, fontSize: fontSize.md, fontWeight: '600' },
   reprocessRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  // Health Connect
+  healthSyncBtn: {
+    backgroundColor: colors.primary, borderRadius: radius.md,
+    padding: spacing.md, alignItems: 'center', marginTop: spacing.sm,
+  },
+  healthSyncBtnText: { color: '#000', fontSize: fontSize.md, fontWeight: '700' },
+  lastSyncText: { color: colors.textMuted, fontSize: fontSize.xs, marginBottom: spacing.xs },
+  healthNote: {
+    color: colors.textMuted, fontSize: fontSize.xs, lineHeight: 16,
+    marginTop: spacing.sm, fontStyle: 'italic',
+  },
+
   userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
   userAvatar: {
     width: 48, height: 48, borderRadius: 24,

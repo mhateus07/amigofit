@@ -15,6 +15,18 @@
           "color": "#00C853",
           "sounds": []
         }
+      ],
+      [
+        "react-native-health-connect",
+        {
+          "androidHealthConnectPermissions": [
+            "android.permission.health.READ_SLEEP",
+            "android.permission.health.READ_STEPS",
+            "android.permission.health.READ_EXERCISE",
+            "android.permission.health.READ_HEART_RATE",
+            "android.permission.health.READ_WEIGHT"
+          ]
+        }
       ]
     ],
     "splash": {
@@ -35,7 +47,9 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "package": "com.anonymous.amigofit",
+      "minSdkVersion": 26
     },
     "web": {
       "favicon": "./assets/favicon.png"
