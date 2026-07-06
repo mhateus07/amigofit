@@ -142,6 +142,19 @@ npx expo start
 
 ---
 
+## Testes automatizados (2026-07-06)
+
+Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v14 + `supertest` (backend).
+
+- `npm test` roda tudo (`jest.config.js` na raiz).
+- `src/screens/__tests__/WelcomeScreen.test.tsx` — smoke test de um componente puro.
+- `src/hooks/__tests__/useChat.test.ts` — estados de loading/erro e envio de mensagem, com `storage` e `AIService` mockados.
+- `src/services/__tests__/ai.test.ts` — `AIService.extractData` (fetch mockado).
+- `server/__tests__/auth.test.js` — registro, login e rota protegida (`pg` mockado, sem Postgres real).
+- `server/index.js` agora exporta `{ app, pool, JWT_SECRET }` e só chama `initDB()`/`app.listen()` quando executado diretamente (`node server/index.js`), permitindo testar as rotas com `supertest`.
+
+---
+
 ## Próximos passos sugeridos
 
 - [ ] Substituir `assets/icon.png` e `assets/adaptive-icon.png` pelo ícone gerado no Lovart

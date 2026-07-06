@@ -418,6 +418,10 @@ app.post('/api/extract', requireAuth, async (req, res) => {
 });
 
 // ── Start ─────────────────────────────────────────────────
-initDB().then(() => {
-  app.listen(PORT, () => console.log(`AmigoFit backend em http://localhost:${PORT}`));
-}).catch(err => { console.error('DB init failed:', err); process.exit(1); });
+if (require.main === module) {
+  initDB().then(() => {
+    app.listen(PORT, () => console.log(`AmigoFit backend em http://localhost:${PORT}`));
+  }).catch(err => { console.error('DB init failed:', err); process.exit(1); });
+}
+
+module.exports = { app, pool, JWT_SECRET };

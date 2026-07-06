@@ -85,19 +85,28 @@ Dependências mortas removidas, `.env` configurado, CORS restrito, JWT_SECRET ob
 ### ✅ Fase 1 — Robustez de dados — concluída 2026-07-05
 Upsert real de mensagens, `CATEGORY_CONFIG` unificado. Validado via curl e emulador.
 
-### 🔵 Fase 2 — Testes automatizados (EM ANDAMENTO)
+### ✅ Fase 2 — Testes automatizados — concluída 2026-07-06
 Objetivo: ter uma rede de segurança mínima antes de mexer em mais nada de produto.
 
 Como fazer, passo a passo:
-- [ ] Instalar: `npx expo install jest jest-expo @testing-library/react-native @testing-library/jest-native`
-- [ ] Configurar `jest.config.js` com preset `jest-expo`
-- [ ] Escrever o primeiro teste, o mais simples possível, para ganhar confiança no setup (ex: um teste trivial de um componente puro)
-- [ ] Cobrir `useChat` (hook do chat): estados de loading/erro, envio de mensagem
-- [ ] Cobrir parsing de `ai.ts`: a extração de dados estruturados retorna o JSON esperado a partir de mensagens de exemplo
-- [ ] Cobrir auth do backend: registro, login, rota protegida sem token retorna 401
-- [ ] Rodar `npm test` e garantir que passa localmente antes de cada commit desta fase
+- [x] Instalar: `jest`, `jest-expo`, `@testing-library/react-native` (`@testing-library/jest-native` ficou de fora — deprecado, os matchers já vêm embutidos no `@testing-library/react-native` 12.4+)
+- [x] Configurar `jest.config.js` com preset `jest-expo`
+- [x] Escrever o primeiro teste, o mais simples possível, para ganhar confiança no setup (`WelcomeScreen.test.tsx`)
+- [x] Cobrir `useChat` (hook do chat): estados de loading/erro, envio de mensagem (`src/hooks/__tests__/useChat.test.ts`, 5 testes)
+- [x] Cobrir parsing de `ai.ts`: a extração de dados estruturados retorna o JSON esperado a partir de mensagens de exemplo (`src/services/__tests__/ai.test.ts`, 3 testes)
+- [x] Cobrir auth do backend: registro, login, rota protegida sem token retorna 401 (`server/__tests__/auth.test.js`, 10 testes, `pg` mockado — sem depender de Postgres real)
+- [x] Rodar `npm test` e garantir que passa localmente antes de cada commit desta fase — 19/19 testes passando
 
-Não avance para a Fase 3 até esses 4 pontos de cobertura mínima existirem.
+**Fase 2 concluída em 2026-07-06.** Detalhes técnicos relevantes para a próxima sessão:
+- `@testing-library/react-native` está na v14, que mudou `render`/`renderHook` para **assíncronos** (`await render(...)`) — diferente da maioria dos tutoriais/exemplos online, que assumem API síncrona.
+- `@testing-library/jest-native` ficou de fora (não instalado): está deprecado, os matchers (`toBeOnTheScreen` etc.) já vêm embutidos no `@testing-library/react-native` 12.4+.
+- Precisou criar `babel.config.js` (não existia no repo) com `babel-preset-expo`, exigido pelo `babel-jest` do preset `jest-expo`.
+- `jest.setup.js` mocka `react-native-safe-area-context` e `@react-native-async-storage/async-storage` globalmente (via `setupFilesAfterEnv`) — sem isso, qualquer teste que importe uma tela ou o `storage.ts` quebra com erro de módulo nativo ausente.
+- Para mockar uma classe (ex.: `AIService`) com `jest.mock()`, o valor da instância criada via `new` fica em `mock.instances[0]`, **não** em `mock.results[0].value` (que registra o retorno explícito do construtor — `undefined` nesse caso). Isso quebrou os testes de `useChat` até ser corrigido.
+- `server/index.js` precisou de um ajuste mínimo (não muda comportamento em produção): agora exporta `{ app, pool, JWT_SECRET }` e só chama `initDB()`/`app.listen()` quando rodado diretamente (`require.main === module`), permitindo testar as rotas com `supertest` sem subir o servidor real. O Postgres é mockado via `jest.mock('pg')`.
+- Teste de `WelcomeScreen` ainda imprime um aviso benigno `overlapping act() calls` no console (por causa das animações do `useEffect`) — não falha o teste, mas ficou como possível limpeza futura, não bloqueante.
+
+Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos gotchas do zero.
 
 ### ⬜ Fase 3 — Produto (Chat / Insights)
 - [ ] Decidir e documentar: insights continuam heurísticos (deixar claro no copy do app) OU migrar `generateInsights()` para usar o LLM de fato
@@ -138,3 +147,4 @@ Prioridade recomendada quando chegar a hora: Integração Health/Fit > Relatóri
 
 - 2026-07-04: Health Connect pausado por decisão do usuário.
 - 2026-07-04: Fases validadas no emulador Pixel_8 antes do celular físico (S24).
+- 2026-07-06: Fase 2 (testes automatizados) concluída — 19 testes (Jest + jest-expo + @testing-library/react-native + supertest), cobrindo `useChat`, extração em `ai.ts` e auth do backend. Ver notas técnicas na seção da Fase 2 acima antes de mexer em testes de novo.
