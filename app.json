@@ -53,6 +53,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "057aa24d-b1ca-4dc7-9996-dc1938c5cf06"
+      }
+    },
+    "owner": "mhateus07"
   }
 }
