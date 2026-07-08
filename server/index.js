@@ -5,6 +5,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { PDFParse } = require('pdf-parse');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -120,7 +121,7 @@ app.use(cors({
   preflightContinue: false,
   optionsSuccessStatus: 204,
 }));
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '15mb' }));
 app.use((req, _res, next) => {
   console.log(`${req.method} ${req.url}`);
   next();
@@ -300,6 +301,70 @@ Se não houver dados relevantes: {"data":[]}`;
 
   text = text.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
   return JSON.parse(text).data || [];
+}
+
+async function extractMealsWithProvider(config, text) {
+  const { provider, apiKey } = config;
+  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
+
+  const PROMPT = `Analise o texto extraído de um plano alimentar em PDF e retorne APENAS JSON válido (sem markdown):
+
+{"meals":[{"name":"...","time":"HH:mm","description":"...","items":["item 1","item 2"]}]}
+
+Regras:
+- "time" em formato 24h HH:mm. Se não estiver explícito, estime pelo nome da refeição (café da manhã ~07:00, almoço ~12:00, lanche ~15:30, jantar ~19:00, ceia ~21:30).
+- "items" é a lista de alimentos/quantidades.
+- Se não houver refeições identificáveis: {"meals":[]}`;
+
+  const userContent = `${PROMPT}\n\nTexto do PDF:\n"""${text}"""`;
+  let responseText;
+
+  if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: userContent }],
+    });
+    responseText = response.content[0].text;
+  } else if (provider === 'openai' || provider === 'groq') {
+    const baseUrl = provider === 'groq'
+      ? 'https://api.groq.com/openai/v1'
+      : 'https://api.openai.com/v1';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_tokens: 2048,
+        messages: [{ role: 'user', content: userContent }],
+        response_format: { type: 'json_object' },
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    responseText = data.choices[0]?.message?.content || '{"meals":[]}';
+  } else if (provider === 'gemini') {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: userContent }] }],
+          generationConfig: { responseMimeType: 'application/json' },
+        }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    responseText = data.candidates[0]?.content?.parts[0]?.text || '{"meals":[]}';
+  } else {
+    return [];
+  }
+
+  responseText = responseText.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+  return JSON.parse(responseText).meals || [];
 }
 
 // ── Health ────────────────────────────────────────────────
@@ -527,6 +592,38 @@ app.post('/api/extract', requireAuth, aiLimiter, async (req, res) => {
   } catch (e) {
     console.error('Extract error:', e.message);
     res.json({ data: [] });
+  }
+});
+
+// ── AI: Extract Meals from PDF ────────────────────────────
+app.post('/api/extract-meals', requireAuth, aiLimiter, async (req, res) => {
+  const config = getProviderConfig(req, res);
+  if (!config) return;
+  const { pdfBase64 } = req.body;
+  if (!pdfBase64) return res.status(400).json({ error: 'pdfBase64 é obrigatório' });
+
+  let text;
+  try {
+    const buffer = Buffer.from(pdfBase64, 'base64');
+    const parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    await parser.destroy();
+    text = result.text || '';
+  } catch (e) {
+    console.error('PDF parse error:', e.message);
+    return res.json({ meals: [], error: 'Não conseguimos ler esse arquivo. Confira se é um PDF válido.' });
+  }
+
+  if (text.trim().length < 30) {
+    return res.json({ meals: [], error: 'Não conseguimos extrair texto deste PDF (pode ser uma imagem escaneada). Tente montar o plano manualmente.' });
+  }
+
+  try {
+    const meals = await extractMealsWithProvider(config, text);
+    res.json({ meals });
+  } catch (e) {
+    console.error('Extract meals error:', e.message);
+    res.json({ meals: [], error: e.message });
   }
 });
 

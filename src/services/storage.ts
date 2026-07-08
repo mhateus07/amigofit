@@ -150,6 +150,19 @@ async function checkInMeal(mealId: string, date: string, status: 'done' | 'skipp
     });
   } catch { /* silent */ }
 }
+async function extractMealsFromPdf(pdfBase64: string): Promise<{ meals: Omit<Meal, 'id'>[]; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/extract-meals`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ pdfBase64 }),
+    });
+    const data = await res.json();
+    return { meals: data.meals || [], error: data.error };
+  } catch {
+    return { meals: [], error: 'Falha de conexão ao enviar o PDF. Tente novamente.' };
+  }
+}
 
 // ── API Key (per-provider) ────────────────────────────────
 async function getApiKey(provider?: AIProvider): Promise<string | null> {
@@ -169,7 +182,7 @@ export const storage = {
   getMessages, saveMessages, addMessage,
   getProfile, saveProfile,
   getExtractedData, addExtractedData,
-  getMealPlan, saveMealPlan, getCheckins, checkInMeal,
+  getMealPlan, saveMealPlan, getCheckins, checkInMeal, extractMealsFromPdf,
   getApiKey, saveApiKey, hasAnyApiKey,
   getProvider, saveProvider,
 };

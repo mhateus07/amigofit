@@ -11,11 +11,18 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Meal, MealCheckin } from '../types';
 import { useMealPlan } from '../hooks/useMealPlan';
+import { storage } from '../services/storage';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
+
+type MealDraft = Omit<Meal, 'id'>;
 
 function checkinFor(mealId: string, checkins: MealCheckin[]) {
   return checkins.find((c) => c.mealId === mealId) || null;
@@ -78,7 +85,7 @@ function MealFormModal({
   onSave,
 }: {
   visible: boolean;
-  initial: Meal | null;
+  initial: MealDraft | null;
   onClose: () => void;
   onSave: (meal: { name: string; time: string; description?: string; items: string[] }) => void;
 }) {
@@ -167,22 +174,90 @@ function MealFormModal({
   );
 }
 
+function PdfReviewModal({
+  visible,
+  drafts,
+  onClose,
+  onEditDraft,
+  onRemoveDraft,
+  onConfirm,
+}: {
+  visible: boolean;
+  drafts: MealDraft[];
+  onClose: () => void;
+  onEditDraft: (index: number) => void;
+  onRemoveDraft: (index: number) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalSheet, styles.reviewSheet]}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Revisar refeições extraídas</Text>
+          <Text style={styles.reviewSubtitle}>
+            Confira e ajuste antes de salvar. Você pode editar ou remover qualquer item.
+          </Text>
+
+          <ScrollView style={styles.reviewList} showsVerticalScrollIndicator={false}>
+            {drafts.map((draft, i) => (
+              <View key={i} style={styles.reviewCard}>
+                <View style={styles.cardTop}>
+                  <Text style={styles.cardTime}>{draft.time}</Text>
+                  <View style={styles.cardActions}>
+                    <TouchableOpacity onPress={() => onEditDraft(i)}><Text style={styles.cardActionIcon}>✏️</Text></TouchableOpacity>
+                    <TouchableOpacity onPress={() => onRemoveDraft(i)}><Text style={styles.cardActionIcon}>🗑️</Text></TouchableOpacity>
+                  </View>
+                </View>
+                <Text style={styles.cardName}>{draft.name}</Text>
+                {draft.items.length > 0 && <Text style={styles.cardItems}>{draft.items.join(', ')}</Text>}
+              </View>
+            ))}
+          </ScrollView>
+
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
+              <Text style={styles.cancelBtnText}>Cancelar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.saveBtn, drafts.length === 0 && styles.saveBtnDisabled]}
+              onPress={onConfirm}
+              disabled={drafts.length === 0}
+            >
+              <Text style={styles.saveBtnText}>Salvar {drafts.length} refeiç{drafts.length === 1 ? 'ão' : 'ões'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function DietaScreen() {
   const { meals, todayCheckins, isLoading, savePlan, checkIn, refresh } = useMealPlan();
   const [refreshing, setRefreshing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingMeal, setEditingMeal] = useState<Meal | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [pdfDrafts, setPdfDrafts] = useState<MealDraft[] | null>(null);
+  const [editingDraftIndex, setEditingDraftIndex] = useState<number | null>(null);
 
   const onRefresh = async () => { setRefreshing(true); await refresh(); setRefreshing(false); };
 
   const sorted = [...meals].sort((a, b) => a.time.localeCompare(b.time));
   const doneCount = todayCheckins.filter((c) => c.status === 'done').length;
 
-  const openAdd = () => { setEditingMeal(null); setFormVisible(true); };
-  const openEdit = (meal: Meal) => { setEditingMeal(meal); setFormVisible(true); };
+  const openAdd = () => { setEditingMeal(null); setEditingDraftIndex(null); setFormVisible(true); };
+  const openEdit = (meal: Meal) => { setEditingMeal(meal); setEditingDraftIndex(null); setFormVisible(true); };
+  const openEditDraft = (index: number) => { setEditingMeal(null); setEditingDraftIndex(index); setFormVisible(true); };
 
   const handleFormSave = async (data: { name: string; time: string; description?: string; items: string[] }) => {
-    if (editingMeal) {
+    if (editingDraftIndex !== null && pdfDrafts) {
+      const updated = [...pdfDrafts];
+      updated[editingDraftIndex] = { ...updated[editingDraftIndex], ...data };
+      setPdfDrafts(updated);
+      setEditingDraftIndex(null);
+    } else if (editingMeal) {
       await savePlan(meals.map((m) => (m.id === editingMeal.id ? { ...m, ...data } : m)));
     } else {
       const newMeal: Meal = { id: `local_${Date.now()}`, source: 'manual', ...data };
@@ -199,6 +274,47 @@ export default function DietaScreen() {
     ]);
   };
 
+  const handleUploadPdf = async () => {
+    const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf' });
+    if (result.canceled || !result.assets?.[0]) return;
+
+    setImporting(true);
+    try {
+      const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const { meals: extracted, error } = await storage.extractMealsFromPdf(base64);
+      if (error) {
+        Alert.alert('Não foi possível ler o PDF', error);
+        return;
+      }
+      if (extracted.length === 0) {
+        Alert.alert('Nenhuma refeição encontrada', 'Não conseguimos identificar refeições nesse PDF. Tente montar o plano manualmente.');
+        return;
+      }
+      setPdfDrafts(extracted);
+    } catch {
+      Alert.alert('Erro', 'Não foi possível processar o arquivo. Tente novamente.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleRemoveDraft = (index: number) => {
+    if (!pdfDrafts) return;
+    setPdfDrafts(pdfDrafts.filter((_, i) => i !== index));
+  };
+
+  const handleConfirmDrafts = async () => {
+    if (!pdfDrafts || pdfDrafts.length === 0) return;
+    const newMeals: Meal[] = pdfDrafts.map((draft, i) => ({
+      id: `pdf_${Date.now()}_${i}`,
+      ...draft,
+    }));
+    await savePlan([...meals, ...newMeals]);
+    setPdfDrafts(null);
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -208,6 +324,13 @@ export default function DietaScreen() {
             {meals.length === 0 ? 'Nenhum plano cadastrado' : `${doneCount} de ${meals.length} refeições hoje`}
           </Text>
         </View>
+        <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPdf} disabled={importing}>
+          {importing ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.pdfBtnText}>📄 PDF</Text>
+          )}
+        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -230,7 +353,7 @@ export default function DietaScreen() {
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>🍽️</Text>
               <Text style={styles.emptyText}>Nenhum plano alimentar ainda</Text>
-              <Text style={styles.emptySubtext}>Toque em + para montar suas refeições do dia manualmente.</Text>
+              <Text style={styles.emptySubtext}>Toque em + para montar manualmente, ou envie o PDF do seu plano no botão acima.</Text>
             </View>
           ) : null
         }
@@ -242,9 +365,18 @@ export default function DietaScreen() {
 
       <MealFormModal
         visible={formVisible}
-        initial={editingMeal}
-        onClose={() => { setFormVisible(false); setEditingMeal(null); }}
+        initial={editingDraftIndex !== null && pdfDrafts ? pdfDrafts[editingDraftIndex] : editingMeal}
+        onClose={() => { setFormVisible(false); setEditingMeal(null); setEditingDraftIndex(null); }}
         onSave={handleFormSave}
+      />
+
+      <PdfReviewModal
+        visible={!!pdfDrafts}
+        drafts={pdfDrafts || []}
+        onClose={() => setPdfDrafts(null)}
+        onEditDraft={openEditDraft}
+        onRemoveDraft={handleRemoveDraft}
+        onConfirm={handleConfirmDrafts}
       />
     </SafeAreaView>
   );
@@ -252,10 +384,13 @@ export default function DietaScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  header: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  header: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },
   subtitle: { color: colors.textSecondary, fontSize: fontSize.sm },
   list: { padding: spacing.md, paddingBottom: 100 },
+
+  pdfBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.full, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, minWidth: 40, minHeight: 32, justifyContent: 'center' },
+  pdfBtnText: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
 
   card: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, borderLeftWidth: 3 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
@@ -308,5 +443,11 @@ const styles = StyleSheet.create({
   cancelBtn: { flex: 1, paddingVertical: spacing.sm, alignItems: 'center', borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
   cancelBtnText: { color: colors.textSecondary, fontWeight: '600' },
   saveBtn: { flex: 1, paddingVertical: spacing.sm, alignItems: 'center', borderRadius: radius.sm, backgroundColor: colors.primary },
+  saveBtnDisabled: { opacity: 0.4 },
   saveBtnText: { color: '#000', fontWeight: '700' },
+
+  reviewSheet: { maxHeight: '85%' },
+  reviewSubtitle: { color: colors.textSecondary, fontSize: fontSize.sm, marginBottom: spacing.md },
+  reviewList: { maxHeight: 400 },
+  reviewCard: { backgroundColor: colors.surfaceElevated, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, borderLeftWidth: 3, borderLeftColor: colors.primary },
 });
