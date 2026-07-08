@@ -27,6 +27,14 @@
             "android.permission.health.READ_WEIGHT"
           ]
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
       ]
     ],
     "splash": {
@@ -48,8 +56,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
-      "package": "com.anonymous.amigofit",
-      "minSdkVersion": 26
+      "package": "com.anonymous.amigofit"
     },
     "web": {
       "favicon": "./assets/favicon.png"
