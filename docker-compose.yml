@@ -28,6 +28,7 @@ services:
       DB_USER: amigofit
       DB_PASSWORD: ${DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8081,http://localhost:19006}
       PORT: 3001
     depends_on:
       db:

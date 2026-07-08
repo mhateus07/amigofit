@@ -20,19 +20,10 @@ import { ptBR } from 'date-fns/locale';
 import { ExtractedData } from '../types';
 import { storage } from '../services/storage';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
+import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../constants/categories';
 
 const { width } = Dimensions.get('window');
 
-const CATEGORY_CONFIG: Record<ExtractedData['category'], { icon: string; color: string; label: string; bg: string }> = {
-  sleep:       { icon: '🌙', color: '#9C7FE8', label: 'Sono',        bg: 'rgba(156,127,232,0.12)' },
-  nutrition:   { icon: '🥗', color: '#FF7B7B', label: 'Alimentação', bg: 'rgba(255,123,123,0.12)' },
-  performance: { icon: '🏋️', color: '#00C853', label: 'Performance', bg: 'rgba(0,200,83,0.12)'    },
-  mood:        { icon: '😊', color: '#FFB300', label: 'Humor',       bg: 'rgba(255,179,0,0.12)'   },
-  health:      { icon: '❤️', color: '#FF4081', label: 'Saúde',       bg: 'rgba(255,64,129,0.12)'  },
-  workout:     { icon: '🔥', color: '#FF7043', label: 'Treino',      bg: 'rgba(255,112,67,0.12)'  },
-};
-
-const CATEGORY_KEYS = Object.keys(CATEGORY_CONFIG) as ExtractedData['category'][];
 const FILTERS = ['Todos', 'Sono', 'Alimentação', 'Performance', 'Humor', 'Saúde', 'Treino'];
 const FILTER_MAP: Record<string, ExtractedData['category']> = {
   Sono: 'sleep', Alimentação: 'nutrition', Performance: 'performance',
