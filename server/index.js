@@ -54,6 +54,27 @@ async function initDB() {
       raw_text TEXT,
       timestamp BIGINT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS meals (
+      id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id),
+      name TEXT NOT NULL,
+      time TEXT NOT NULL,
+      description TEXT,
+      items JSONB,
+      source TEXT NOT NULL DEFAULT 'manual',
+      active BOOLEAN NOT NULL DEFAULT true,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS meal_checkins (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT REFERENCES users(id),
+      meal_id TEXT REFERENCES meals(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      status TEXT NOT NULL,
+      checked_at BIGINT,
+      UNIQUE (meal_id, date)
+    );
   `);
   console.log('Database ready');
 }
@@ -386,6 +407,61 @@ app.post('/api/extracted-data', requireAuth, async (req, res) => {
       [req.userId, d.category, d.label, d.value, d.rawText || '', d.timestamp]
     );
   }
+  res.json({ ok: true });
+});
+
+// ── Meal Plan ─────────────────────────────────────────────
+app.get('/api/meal-plan', requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT id, name, time, description, items, source FROM meals WHERE user_id=$1 AND active=true ORDER BY time ASC',
+    [req.userId]
+  );
+  res.json({ meals: rows });
+});
+
+app.post('/api/meal-plan', requireAuth, async (req, res) => {
+  const { meals } = req.body;
+  if (!Array.isArray(meals)) return res.status(400).json({ error: 'meals must be array' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM meals WHERE user_id=$1', [req.userId]);
+    for (const [i, m] of meals.entries()) {
+      const id = m.id || ('meal_' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+      await client.query(
+        'INSERT INTO meals (id, user_id, name, time, description, items, source, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [id, req.userId, m.name, m.time, m.description || null, JSON.stringify(m.items || []), m.source || 'manual', i]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('Save meal plan error:', e.message);
+    res.status(500).json({ error: 'Erro ao salvar plano alimentar' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/meal-plan/checkins', requireAuth, async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: 'date é obrigatório' });
+  const { rows } = await pool.query(
+    'SELECT meal_id as "mealId", date, status, checked_at as "checkedAt" FROM meal_checkins WHERE user_id=$1 AND date=$2',
+    [req.userId, date]
+  );
+  res.json({ checkins: rows.map(r => ({ ...r, checkedAt: r.checkedAt ? Number(r.checkedAt) : null })) });
+});
+
+app.post('/api/meal-plan/checkins', requireAuth, async (req, res) => {
+  const { mealId, date, status } = req.body;
+  if (!mealId || !date || !status) return res.status(400).json({ error: 'mealId, date e status são obrigatórios' });
+  await pool.query(
+    `INSERT INTO meal_checkins (user_id, meal_id, date, status, checked_at) VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (meal_id, date) DO UPDATE SET status=$4, checked_at=$5`,
+    [req.userId, mealId, date, status, Date.now()]
+  );
   res.json({ ok: true });
 });
 

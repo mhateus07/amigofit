@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import ChatScreen from './src/screens/ChatScreen';
 import DiaryScreen from './src/screens/DiaryScreen';
+import DietaScreen from './src/screens/DietaScreen';
 import InsightsScreen from './src/screens/InsightsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import AuthScreen from './src/screens/AuthScreen';
@@ -76,6 +77,11 @@ function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
         name="Diário"
         options={{ tabBarIcon: ({ focused }) => <TabIcon icon="📝" focused={focused} /> }}
         component={DiaryScreen}
+      />
+      <Tab.Screen
+        name="Dieta"
+        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="🍽️" focused={focused} /> }}
+        component={DietaScreen}
       />
       <Tab.Screen
         name="Insights"

@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Message, UserProfile, ExtractedData, AIProvider } from '../types';
+import { Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin } from '../types';
 
 export const API_BASE = 'http://173.212.208.109:3001';
 
@@ -117,6 +117,40 @@ async function addExtractedData(data: ExtractedData[]): Promise<void> {
   } catch { /* silent */ }
 }
 
+// ── Meal Plan ─────────────────────────────────────────────
+async function getMealPlan(): Promise<Meal[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/meal-plan`, { headers: await authHeaders() });
+    const data = await res.json();
+    return data.meals || [];
+  } catch { return []; }
+}
+async function saveMealPlan(meals: Meal[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/meal-plan`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ meals }),
+    });
+  } catch { /* silent */ }
+}
+async function getCheckins(date: string): Promise<MealCheckin[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/meal-plan/checkins?date=${date}`, { headers: await authHeaders() });
+    const data = await res.json();
+    return data.checkins || [];
+  } catch { return []; }
+}
+async function checkInMeal(mealId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/meal-plan/checkins`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ mealId, date, status }),
+    });
+  } catch { /* silent */ }
+}
+
 // ── API Key (per-provider) ────────────────────────────────
 async function getApiKey(provider?: AIProvider): Promise<string | null> {
   const p = provider ?? await getProvider();
@@ -135,6 +169,7 @@ export const storage = {
   getMessages, saveMessages, addMessage,
   getProfile, saveProfile,
   getExtractedData, addExtractedData,
+  getMealPlan, saveMealPlan, getCheckins, checkInMeal,
   getApiKey, saveApiKey, hasAnyApiKey,
   getProvider, saveProvider,
 };

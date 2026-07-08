@@ -39,6 +39,22 @@ export interface Conversation {
 
 export type AIProvider = 'anthropic' | 'openai' | 'gemini' | 'groq';
 
+export interface Meal {
+  id: string;
+  name: string;
+  time: string; // 'HH:mm'
+  description?: string;
+  items: string[];
+  source: 'pdf' | 'manual';
+}
+
+export interface MealCheckin {
+  mealId: string;
+  date: string; // 'YYYY-MM-DD'
+  status: 'done' | 'skipped';
+  checkedAt?: number;
+}
+
 export type RootStackParamList = {
   Onboarding: undefined;
   Main: undefined;
@@ -47,6 +63,7 @@ export type RootStackParamList = {
 export type MainTabParamList = {
   Chat: undefined;
   Diary: undefined;
+  Dieta: undefined;
   Insights: undefined;
   Profile: undefined;
 };
