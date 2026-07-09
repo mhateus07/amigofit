@@ -28,6 +28,8 @@ export interface UserProfile {
   sleepGoal?: number;
   notificationEnabled?: boolean;
   notificationTime?: string;
+  aiProvider?: AIProvider;
+  aiApiKeys?: Partial<Record<AIProvider, string>>;
 }
 
 export interface Conversation {

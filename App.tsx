@@ -16,7 +16,7 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import SplashScreen from './src/screens/SplashScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 import { UserProfile } from './src/types';
-import { storage, getToken, getStoredUser, clearToken } from './src/services/storage';
+import { storage, getToken, getStoredUser, clearToken, hydrateAiConfigFromProfile } from './src/services/storage';
 import { colors, fontSize } from './src/constants/theme';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -121,6 +121,7 @@ export default function App() {
         if (token && user) {
           setAuthUser(user);
           const p = await storage.getProfile();
+          await hydrateAiConfigFromProfile(p);
           setProfile(p);
         }
       } catch (e) {
@@ -135,6 +136,7 @@ export default function App() {
   const handleAuth = async (user: { id: string; name: string; email: string }, _token: string) => {
     setAuthUser(user);
     const p = await storage.getProfile();
+    await hydrateAiConfigFromProfile(p);
     setProfile(p);
   };
 

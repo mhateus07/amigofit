@@ -112,9 +112,24 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
     })();
   }, []);
 
+  // Guarda o provedor/chave também no perfil sincronizado pelo servidor
+  // (mesmo mecanismo já usado por nome/objetivo/etc.), pra não precisar
+  // reconfigurar a chave da IA a cada reinstalação ou novo aparelho.
+  const persistAiConfig = async (updates: { aiProvider?: AIProvider; aiApiKeys?: Partial<Record<AIProvider, string>> }) => {
+    if (!profile) return;
+    const updated: UserProfile = {
+      ...profile,
+      ...updates,
+      aiApiKeys: { ...profile.aiApiKeys, ...updates.aiApiKeys },
+    };
+    onProfileUpdate(updated);
+    await storage.saveProfile(updated);
+  };
+
   const handleProviderChange = async (p: AIProvider) => {
     setProvider(p);
     await saveProvider(p);
+    await persistAiConfig({ aiProvider: p });
     setShowKeyInput(false);
     setEditingKey('');
   };
@@ -128,6 +143,7 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
     }
     await Promise.all([storage.saveApiKey(key, provider), saveProvider(provider)]);
     setProviderKeys(prev => ({ ...prev, [provider]: key }));
+    await persistAiConfig({ aiProvider: provider, aiApiKeys: { [provider]: key } });
     setEditingKey('');
     setShowKeyInput(false);
     Alert.alert('Chave salva!', `${info.label} configurado com ${info.model}.`);
@@ -272,6 +288,9 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
                               const fallback = next || 'anthropic';
                               setProvider(fallback);
                               await saveProvider(fallback);
+                              await persistAiConfig({ aiProvider: fallback, aiApiKeys: { [p]: '' } });
+                            } else {
+                              await persistAiConfig({ aiApiKeys: { [p]: '' } });
                             }
                           },
                         },

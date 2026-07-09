@@ -178,6 +178,21 @@ async function hasAnyApiKey(): Promise<boolean> {
   return pairs.some(([, v]) => !!v);
 }
 
+// Popula o cache local (AsyncStorage) a partir do provedor/chaves salvos no
+// perfil do servidor - roda no login/startup para que o usuário não precise
+// reconfigurar a chave da IA a cada reinstalação/novo aparelho.
+export async function hydrateAiConfigFromProfile(profile: UserProfile | null): Promise<void> {
+  if (!profile) return;
+  const tasks: Promise<void>[] = [];
+  if (profile.aiProvider) tasks.push(saveProvider(profile.aiProvider));
+  if (profile.aiApiKeys) {
+    for (const p of Object.keys(PROVIDER_KEY_MAP) as AIProvider[]) {
+      tasks.push(saveApiKey(profile.aiApiKeys[p] ?? '', p));
+    }
+  }
+  await Promise.all(tasks);
+}
+
 export const storage = {
   getMessages, saveMessages, addMessage,
   getProfile, saveProfile,
