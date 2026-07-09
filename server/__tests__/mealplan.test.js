@@ -138,7 +138,7 @@ describe('Plano alimentar', () => {
     });
 
     it('registra o check-in via upsert idempotente', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [] });
+      mockClientQuery.mockResolvedValue({ rows: [] });
 
       const res = await request(app)
         .post('/api/meal-plan/checkins')
@@ -147,10 +147,73 @@ describe('Plano alimentar', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
-      expect(mockQuery).toHaveBeenCalledWith(
+      expect(mockClientQuery).toHaveBeenCalledWith(
         expect.stringContaining('ON CONFLICT'),
         ['u_1', 'meal_1', '2026-07-07', 'done', expect.any(Number)]
       );
+      expect(mockClientQuery).toHaveBeenCalledWith('COMMIT');
+      expect(mockRelease).toHaveBeenCalled();
+    });
+
+    it('ao marcar "done", também grava um dado de nutrição extraído', async () => {
+      mockClientQuery.mockImplementation((sql) => {
+        if (typeof sql === 'string' && sql.startsWith('SELECT name')) {
+          return Promise.resolve({ rows: [{ name: 'Almoço', time: '12:00', description: null, items: ['arroz', 'frango'] }] });
+        }
+        return Promise.resolve({ rows: [] });
+      });
+
+      const res = await request(app)
+        .post('/api/meal-plan/checkins')
+        .set('Authorization', `Bearer ${authToken()}`)
+        .send({ mealId: 'meal_1', date: '2026-07-07', status: 'done' });
+
+      expect(res.status).toBe(200);
+      expect(mockClientQuery).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM extracted_data'),
+        ['u_1', 'meal_checkin:meal_1:2026-07-07']
+      );
+      expect(mockClientQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO extracted_data'),
+        ['u_1', 'Almoço', 'arroz, frango', 'Marcado como feita no plano alimentar (12:00)', expect.any(Number), 'meal_checkin:meal_1:2026-07-07']
+      );
+    });
+
+    it('ao marcar "skipped", só remove o dado de nutrição anterior (sem inserir de novo)', async () => {
+      mockClientQuery.mockResolvedValue({ rows: [] });
+
+      const res = await request(app)
+        .post('/api/meal-plan/checkins')
+        .set('Authorization', `Bearer ${authToken()}`)
+        .send({ mealId: 'meal_1', date: '2026-07-07', status: 'skipped' });
+
+      expect(res.status).toBe(200);
+      expect(mockClientQuery).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM extracted_data'),
+        ['u_1', 'meal_checkin:meal_1:2026-07-07']
+      );
+      expect(mockClientQuery).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO extracted_data'),
+        expect.anything()
+      );
+    });
+
+    it('faz rollback e retorna 500 em caso de erro', async () => {
+      mockClientQuery.mockImplementation((sql) => {
+        if (typeof sql === 'string' && sql.startsWith('INSERT INTO meal_checkins')) {
+          return Promise.reject(new Error('boom'));
+        }
+        return Promise.resolve({ rows: [] });
+      });
+
+      const res = await request(app)
+        .post('/api/meal-plan/checkins')
+        .set('Authorization', `Bearer ${authToken()}`)
+        .send({ mealId: 'meal_1', date: '2026-07-07', status: 'done' });
+
+      expect(res.status).toBe(500);
+      expect(mockClientQuery).toHaveBeenCalledWith('ROLLBACK');
+      expect(mockRelease).toHaveBeenCalled();
     });
   });
 });

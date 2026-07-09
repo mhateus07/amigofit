@@ -54,7 +54,8 @@ async function initDB() {
       label TEXT NOT NULL,
       value TEXT NOT NULL,
       raw_text TEXT,
-      timestamp BIGINT NOT NULL
+      timestamp BIGINT NOT NULL,
+      source_ref TEXT
     );
     CREATE TABLE IF NOT EXISTS meals (
       id TEXT PRIMARY KEY,
@@ -78,6 +79,9 @@ async function initDB() {
       UNIQUE (meal_id, date)
     );
   `);
+  // Coluna adicionada depois que a tabela já existia em produção -
+  // CREATE TABLE IF NOT EXISTS não altera tabelas existentes.
+  await pool.query(`ALTER TABLE extracted_data ADD COLUMN IF NOT EXISTS source_ref TEXT;`);
   console.log('Database ready');
 }
 
@@ -559,12 +563,47 @@ app.get('/api/meal-plan/checkins', requireAuth, async (req, res) => {
 app.post('/api/meal-plan/checkins', requireAuth, async (req, res) => {
   const { mealId, date, status } = req.body;
   if (!mealId || !date || !status) return res.status(400).json({ error: 'mealId, date e status são obrigatórios' });
-  await pool.query(
-    `INSERT INTO meal_checkins (user_id, meal_id, date, status, checked_at) VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (meal_id, date) DO UPDATE SET status=$4, checked_at=$5`,
-    [req.userId, mealId, date, status, Date.now()]
-  );
-  res.json({ ok: true });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const checkedAt = Date.now();
+    await client.query(
+      `INSERT INTO meal_checkins (user_id, meal_id, date, status, checked_at) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (meal_id, date) DO UPDATE SET status=$4, checked_at=$5`,
+      [req.userId, mealId, date, status, checkedAt]
+    );
+
+    // "Comi" também vira um dado extraído de nutrição, visível no Diário/Insights.
+    // Marcar como "pulei" (ou re-marcar) remove o registro anterior via source_ref,
+    // pra não duplicar/deixar lixo se o usuário alternar o status várias vezes.
+    const sourceRef = `meal_checkin:${mealId}:${date}`;
+    await client.query('DELETE FROM extracted_data WHERE user_id=$1 AND source_ref=$2', [req.userId, sourceRef]);
+    if (status === 'done') {
+      const { rows } = await client.query(
+        'SELECT name, time, description, items FROM meals WHERE id=$1 AND user_id=$2',
+        [mealId, req.userId]
+      );
+      const meal = rows[0];
+      if (meal) {
+        const value = meal.description
+          || (Array.isArray(meal.items) && meal.items.length ? meal.items.join(', ') : 'Refeição registrada');
+        await client.query(
+          `INSERT INTO extracted_data (user_id, category, label, value, raw_text, timestamp, source_ref)
+           VALUES ($1,'nutrition',$2,$3,$4,$5,$6)`,
+          [req.userId, meal.name, value, `Marcado como feita no plano alimentar (${meal.time})`, checkedAt, sourceRef]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('Checkin error:', e.message);
+    res.status(500).json({ error: 'Erro ao registrar check-in' });
+  } finally {
+    client.release();
+  }
 });
 
 // ── AI: Chat ──────────────────────────────────────────────
