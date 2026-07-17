@@ -1,6 +1,6 @@
 # AmigoFit — Escopo e Guia de Execução
 
-*Atualizado em 2026-07-05. Este é o único documento que você deveria abrir no dia a dia. `PLANEJAMENTO.md` e `PLANEJAMENTO_AMIGOFIT.md` são visão de produto (consultar raramente); `DEVLOG.md` é changelog (só escrever, não planejar a partir dele).*
+*Atualizado em 2026-07-17. Este é o único documento que você deveria abrir no dia a dia. `PLANEJAMENTO.md` e `PLANEJAMENTO_AMIGOFIT.md` são visão de produto (consultar raramente); `DEVLOG.md` é changelog (só escrever, não planejar a partir dele).*
 
 ---
 
@@ -61,9 +61,9 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 ### Riscos conhecidos (revisar antes de cada fase)
 | # | Problema | Onde | Status |
 |---|---|---|---|
-| 1 | CORS aberto | `server/index.js` | ✅ Corrigido na Fase 0 (local) — **falta deploy em produção** |
-| 2 | `JWT_SECRET` sem fallback seguro | `server/index.js` | ✅ Corrigido na Fase 0 — **falta deploy em produção** |
-| 3 | Sem rate limit em `/api/chat` e `/api/extract` | `server/index.js` | ✅ Corrigido na Fase 0 (local) — **falta deploy** |
+| 1 | CORS aberto | `server/index.js` | ✅ Corrigido na Fase 0, deployado em produção em 2026-07-17 |
+| 2 | `JWT_SECRET` sem fallback seguro | `server/index.js` | ✅ Corrigido na Fase 0, deployado em produção em 2026-07-17 |
+| 3 | Sem rate limit em `/api/chat` e `/api/extract` | `server/index.js` | ✅ Corrigido na Fase 0, deployado em produção em 2026-07-17 |
 | 4 | DELETE + reinsert de mensagens | `server/index.js` | ✅ Corrigido na Fase 1 (upsert) |
 | 5 | URL de backend hardcoded | `src/services/storage.ts` | ✅ Corrigido na Fase 0 (`.env`) |
 | 6 | Documentos de planejamento conflitantes | raiz do repo | Em resolução — este arquivo centraliza |
@@ -74,13 +74,16 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 11 | Chat sem streaming | `ai.ts` / backend | Pendente, não bloqueante |
 | 12 | Logs do backend não registram status HTTP | `server/index.js` | Pendente, achado na Fase 1 |
 | 13 | `expo-file-system` com API removida — "compartilhar relatório semanal" quebrado | `InsightsScreen.tsx` | Pendente (Fase 3) |
+| 14 | Backend em HTTP puro, sem TLS (chaves de API de IA trafegando sem criptografia) | VPS de produção | ✅ Corrigido em 2026-07-17 — HTTPS via Traefik/EasyPanel + Let's Encrypt (`amigofit-api.impulsiodigital.com`), porta 3001 HTTP fechada |
+| 15 | Deploy manual multi-passo via SSH, sem script | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/deploy.sh` |
+| 16 | Sem backup do banco de produção | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/backup-db.sh` via cron diário, retenção de 14 dias |
 
 ---
 
 ## 3. Fases
 
 ### ✅ Fase 0 — Higiene rápida — concluída 2026-07-04
-Dependências mortas removidas, `.env` configurado, CORS restrito, JWT_SECRET obrigatório, rate limit em auth. **Pendente:** deploy dessas mudanças no VPS de produção.
+Dependências mortas removidas, `.env` configurado, CORS restrito, JWT_SECRET obrigatório, rate limit em auth. Deploy dessas mudanças no VPS de produção concluído em 2026-07-17.
 
 ### ✅ Fase 1 — Robustez de dados — concluída 2026-07-05
 Upsert real de mensagens, `CATEGORY_CONFIG` unificado. Validado via curl e emulador.
@@ -114,7 +117,10 @@ Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos 
 - [ ] Corrigir `InsightsScreen.tsx`: substituir API removida do `expo-file-system` (`cacheDirectory`/`EncodingType`) para destravar "compartilhar relatório semanal"
 
 ### ⬜ Fase 4 — Pendências de infraestrutura e produto
-- [ ] Deploy das correções da Fase 0 no VPS de produção
+- [x] Deploy das correções da Fase 0 no VPS de produção — concluído 2026-07-17
+- [x] HTTPS no backend de produção — concluído 2026-07-17 (achado #14)
+- [x] Script de deploy automatizado — concluído 2026-07-17 (achado #15)
+- [x] Backup automático do banco de produção — concluído 2026-07-17 (achado #16)
 - [ ] Retomar Health Connect (estava pausado por decisão do usuário em 2026-07-04)
 - [ ] Export de dados em PDF/CSV
 - [ ] Push notifications via EAS Build
@@ -148,4 +154,4 @@ Prioridade recomendada quando chegar a hora: Integração Health/Fit > Relatóri
 - 2026-07-04: Health Connect pausado por decisão do usuário.
 - 2026-07-04: Fases validadas no emulador Pixel_8 antes do celular físico (S24).
 - 2026-07-06: Fase 2 (testes automatizados) concluída — 19 testes (Jest + jest-expo + @testing-library/react-native + supertest), cobrindo `useChat`, extração em `ai.ts` e auth do backend. Ver notas técnicas na seção da Fase 2 acima antes de mexer em testes de novo.
-- 2026-07-17: Backend de produção agora serve via HTTPS em `https://amigofit-api.impulsiodigital.com` (Traefik/EasyPanel já existente no VPS + Let's Encrypt automático), em vez de HTTP puro no IP. Porta 3001 direta mantida publicada até o próximo build EAS trocar a URL usada pelo app instalado — remover depois. `scripts/deploy.sh` (deploy manual em 1 comando) e `scripts/backup-db.sh` (backup diário via cron, retém 14 dias em `/opt/amigofit/backups/`) adicionados na VPS.
+- 2026-07-17: Backend de produção migrado de HTTP puro no IP para HTTPS em `https://amigofit-api.impulsiodigital.com` (Traefik/EasyPanel já existente no VPS + Let's Encrypt automático). Novo build EAS gerado com a URL HTTPS, instalado e testado com sucesso no aparelho do usuário; porta 3001 HTTP direta removida do `docker-compose.yml` e confirmada fechada. `scripts/deploy.sh` (deploy manual em 1 comando) e `scripts/backup-db.sh` (backup diário via cron, retém 14 dias em `/opt/amigofit/backups/`) adicionados e testados na VPS. Ver riscos #14, #15, #16.
