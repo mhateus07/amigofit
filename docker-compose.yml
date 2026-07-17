@@ -33,6 +33,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      - default
+      - easypanel
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=easypanel"
+      - "traefik.http.routers.amigofit-api.entrypoints=https"
+      - "traefik.http.routers.amigofit-api.rule=Host(`amigofit-api.impulsiodigital.com`)"
+      - "traefik.http.routers.amigofit-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.amigofit-api.loadbalancer.server.port=3001"
+
+networks:
+  default:
+    name: amigofit_default
+  easypanel:
+    external: true
 
 volumes:
   pgdata:
