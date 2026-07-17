@@ -33,6 +33,9 @@ yarn-error.*
 # local env files
 .env*.local
 
+# backups locais de banco (gerados na VPS pelo scripts/backup-db.sh)
+/backups/
+
 # typescript
 *.tsbuildinfo
 

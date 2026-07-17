@@ -148,3 +148,4 @@ Prioridade recomendada quando chegar a hora: Integração Health/Fit > Relatóri
 - 2026-07-04: Health Connect pausado por decisão do usuário.
 - 2026-07-04: Fases validadas no emulador Pixel_8 antes do celular físico (S24).
 - 2026-07-06: Fase 2 (testes automatizados) concluída — 19 testes (Jest + jest-expo + @testing-library/react-native + supertest), cobrindo `useChat`, extração em `ai.ts` e auth do backend. Ver notas técnicas na seção da Fase 2 acima antes de mexer em testes de novo.
+- 2026-07-17: Backend de produção agora serve via HTTPS em `https://amigofit-api.impulsiodigital.com` (Traefik/EasyPanel já existente no VPS + Let's Encrypt automático), em vez de HTTP puro no IP. Porta 3001 direta mantida publicada até o próximo build EAS trocar a URL usada pelo app instalado — remover depois. `scripts/deploy.sh` (deploy manual em 1 comando) e `scripts/backup-db.sh` (backup diário via cron, retém 14 dias em `/opt/amigofit/backups/`) adicionados na VPS.
