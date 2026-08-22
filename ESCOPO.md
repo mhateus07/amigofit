@@ -112,9 +112,9 @@ Como fazer, passo a passo:
 Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos gotchas do zero.
 
 ### ⬜ Fase 3 — Produto (Chat / Insights)
+- [x] Corrigir `InsightsScreen.tsx`: substituir API removida do `expo-file-system` (`cacheDirectory`/`EncodingType`) para destravar "compartilhar relatório semanal" — **corrigido e confirmado em 2026-08-22** (troca de `import * as FileSystem from 'expo-file-system'` para `'expo-file-system/legacy'`, mesmo padrão já usado em `DietaScreen.tsx`). Testado via Expo Go/túnel no iPhone: compartilhamento do relatório semanal funcionando.
 - [ ] Decidir e documentar: insights continuam heurísticos (deixar claro no copy do app) OU migrar `generateInsights()` para usar o LLM de fato
 - [ ] Avaliar streaming no chat (custo x benefício, registrar decisão aqui)
-- [ ] Corrigir `InsightsScreen.tsx`: substituir API removida do `expo-file-system` (`cacheDirectory`/`EncodingType`) para destravar "compartilhar relatório semanal"
 
 ### ⬜ Fase 4 — Pendências de infraestrutura e produto
 - [x] Deploy das correções da Fase 0 no VPS de produção — concluído 2026-07-17

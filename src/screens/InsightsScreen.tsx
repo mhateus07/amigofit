@@ -3,7 +3,7 @@ import { View, Text, FlatList, StyleSheet, RefreshControl, Dimensions, Touchable
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Polyline, Circle, Text as SvgText, Line as SvgLine } from 'react-native-svg';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { format, subDays, isAfter, startOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { ExtractedData, UserProfile } from '../types';
