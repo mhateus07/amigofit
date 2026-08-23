@@ -113,7 +113,7 @@ Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos 
 
 ### ⬜ Fase 3 — Produto (Chat / Insights)
 - [x] Corrigir `InsightsScreen.tsx`: substituir API removida do `expo-file-system` (`cacheDirectory`/`EncodingType`) para destravar "compartilhar relatório semanal" — **corrigido e confirmado em 2026-08-22** (troca de `import * as FileSystem from 'expo-file-system'` para `'expo-file-system/legacy'`, mesmo padrão já usado em `DietaScreen.tsx`). Testado via Expo Go/túnel no iPhone: compartilhamento do relatório semanal funcionando.
-- [ ] Decidir e documentar: insights continuam heurísticos (deixar claro no copy do app) OU migrar `generateInsights()` para usar o LLM de fato
+- [x] Migrar insights de heurística para IA real — **implementado em 2026-08-22**: novo endpoint `POST /api/insights` (backend, multi-provedor, mesmo padrão de `/api/extract`) gera de 3-5 insights via LLM a partir dos dados dos últimos 30 dias + perfil. `InsightsScreen.tsx` usa a IA quando há chave configurada e ≥3 registros (com cache diário em AsyncStorage, ignorado no pull-to-refresh); cai de volta na heurística antiga (`generateHeuristicInsights`) se não houver chave, poucos dados, ou a chamada falhar. 8 testes novos (4 backend, 2 frontend + os 2 do fix anterior), 44/44 passando. **Pendente deploy no VPS** — rota não existe em produção ainda (`curl` deu 404), por isso não aparece nada de IA no teste do usuário via Expo Go.
 - [ ] Avaliar streaming no chat (custo x benefício, registrar decisão aqui)
 
 ### ⬜ Fase 4 — Pendências de infraestrutura e produto

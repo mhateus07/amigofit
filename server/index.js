@@ -307,6 +307,118 @@ Se não houver dados relevantes: {"data":[]}`;
   return JSON.parse(text).data || [];
 }
 
+function buildInsightsPrompt(data, profile) {
+  const now = Date.now();
+  const last30 = data.filter((d) => now - d.timestamp <= 30 * 86400000);
+  if (last30.length === 0) return null;
+
+  const byCategory = {};
+  last30.forEach((d) => {
+    (byCategory[d.category] || (byCategory[d.category] = [])).push(d);
+  });
+
+  const categoryLabels = {
+    sleep: 'SONO', nutrition: 'ALIMENTAÇÃO', performance: 'PERFORMANCE',
+    mood: 'HUMOR', health: 'SAÚDE', workout: 'TREINOS',
+  };
+
+  const lines = [];
+  for (const [cat, entries] of Object.entries(byCategory)) {
+    lines.push(`\n${categoryLabels[cat] || cat.toUpperCase()} (${entries.length} registros):`);
+    entries.slice(-25).forEach((e) => {
+      const date = new Date(e.timestamp).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      lines.push(`  • ${date} — ${e.label}: ${e.value}`);
+    });
+  }
+
+  const goalLabel = profile?.goal === 'hypertrophy' ? 'Hipertrofia'
+    : profile?.goal === 'weight_loss' ? 'Emagrecimento'
+    : profile?.goal === 'conditioning' ? 'Condicionamento'
+    : 'Saúde geral';
+  const levelLabel = profile?.level === 'beginner' ? 'Iniciante'
+    : profile?.level === 'intermediate' ? 'Intermediário'
+    : 'Avançado';
+  const profileBlock = profile
+    ? `Objetivo: ${goalLabel}. Nível: ${levelLabel}. Meta de treinos/semana: ${profile.weeklyWorkoutGoal ?? 3}. Meta de sono: ${profile.sleepGoal ?? 8}h.`
+    : '';
+
+  return `Você é um personal trainer analisando os dados dos últimos 30 dias de um usuário do AmigoFit. ${profileBlock}
+
+DADOS REGISTRADOS:
+${lines.join('\n')}
+
+Gere de 3 a 5 insights personalizados, específicos e acionáveis em português brasileiro, com base em PADRÕES REAIS nos dados acima (correlações entre sono/performance/alimentação, consistência de treinos, tendências, o que fazer a seguir). Não invente números — use apenas o que está nos dados acima. Seja direto e evite generalidades óbvias que não dependem dos dados.
+
+Retorne APENAS JSON válido (sem markdown):
+{"insights":[{"icon":"um único emoji relevante","title":"título curto (máx 6 palavras)","description":"1-2 frases explicando o padrão e uma sugestão prática","severity":"positive|warning|neutral"}]}`;
+}
+
+async function generateInsightsWithProvider(config, data, profile) {
+  const { provider, apiKey } = config;
+  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
+
+  const prompt = buildInsightsPrompt(data, profile);
+  if (!prompt) return [];
+
+  let text;
+  if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    text = response.content[0].text;
+  } else if (provider === 'openai' || provider === 'groq') {
+    const baseUrl = provider === 'groq'
+      ? 'https://api.groq.com/openai/v1'
+      : 'https://api.openai.com/v1';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+      }),
+    });
+    const data2 = await res.json();
+    if (!res.ok) throw new Error(data2.error?.message || `HTTP ${res.status}`);
+    text = data2.choices[0]?.message?.content || '{"insights":[]}';
+  } else if (provider === 'gemini') {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json' },
+        }),
+      }
+    );
+    const data2 = await res.json();
+    if (!res.ok) throw new Error(data2.error?.message || `HTTP ${res.status}`);
+    text = data2.candidates[0]?.content?.parts[0]?.text || '{"insights":[]}';
+  } else {
+    return [];
+  }
+
+  text = text.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+  const parsed = JSON.parse(text);
+  const insights = Array.isArray(parsed.insights) ? parsed.insights : [];
+  return insights
+    .filter((i) => i && i.title && i.description)
+    .slice(0, 6)
+    .map((i) => ({
+      icon: typeof i.icon === 'string' && i.icon ? i.icon : '💡',
+      title: String(i.title),
+      description: String(i.description),
+      severity: ['positive', 'warning', 'neutral'].includes(i.severity) ? i.severity : 'neutral',
+    }));
+}
+
 async function extractMealsWithProvider(config, text) {
   const { provider, apiKey } = config;
   const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
@@ -631,6 +743,21 @@ app.post('/api/extract', requireAuth, aiLimiter, async (req, res) => {
   } catch (e) {
     console.error('Extract error:', e.message);
     res.json({ data: [] });
+  }
+});
+
+// ── AI: Insights ──────────────────────────────────────────
+app.post('/api/insights', requireAuth, aiLimiter, async (req, res) => {
+  const config = getProviderConfig(req, res);
+  if (!config) return;
+  const { data, profile } = req.body;
+  if (!Array.isArray(data)) return res.status(400).json({ error: 'data must be array' });
+  try {
+    const insights = await generateInsightsWithProvider(config, data, profile);
+    res.json({ insights });
+  } catch (e) {
+    console.error('Insights error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

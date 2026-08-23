@@ -48,3 +48,39 @@ describe('AIService.extractData', () => {
     expect(result).toEqual([]);
   });
 });
+
+describe('AIService.generateInsights', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('retorna os insights gerados pela API', async () => {
+    const mockInsights = [
+      { icon: '🌙', title: 'Sono baixo', description: 'Durma mais.', severity: 'warning' },
+    ];
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ insights: mockInsights }),
+    }) as unknown as typeof fetch;
+
+    const service = new AIService();
+    const result = await service.generateInsights([], null);
+
+    expect(result).toEqual(mockInsights);
+  });
+
+  it('lança erro com a mensagem do servidor quando a resposta não é ok', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'API key ausente' }),
+    }) as unknown as typeof fetch;
+
+    const service = new AIService();
+
+    await expect(service.generateInsights([], null)).rejects.toThrow('API key ausente');
+  });
+});

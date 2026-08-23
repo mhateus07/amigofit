@@ -1,4 +1,4 @@
-import { Message, UserProfile, ExtractedData } from '../types';
+import { Message, UserProfile, ExtractedData, AiInsight } from '../types';
 import { format, subDays, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { API_BASE, authHeaders } from './storage';
@@ -135,5 +135,19 @@ export class AIService {
     } catch {
       return [];
     }
+  }
+
+  async generateInsights(data: ExtractedData[], profile: UserProfile | null): Promise<AiInsight[]> {
+    const res = await fetch(`${API_BASE}/api/insights`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ data, profile }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(errData.error || 'Erro ao gerar insights');
+    }
+    const resData = await res.json();
+    return resData.insights || [];
   }
 }

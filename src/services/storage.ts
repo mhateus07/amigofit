@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin } from '../types';
+import { Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin, AiInsight } from '../types';
 
 export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://amigofit-api.impulsiodigital.com';
 
@@ -11,7 +11,14 @@ const LOCAL_KEYS = {
   API_KEY_OPENAI: 'amigofit_api_key_openai',
   API_KEY_GEMINI: 'amigofit_api_key_gemini',
   API_KEY_GROQ: 'amigofit_api_key_groq',
+  INSIGHTS_CACHE: 'amigofit_insights_cache',
 };
+
+interface InsightsCache {
+  date: string;
+  count: number;
+  insights: AiInsight[];
+}
 
 const PROVIDER_KEY_MAP: Record<AIProvider, string> = {
   anthropic: LOCAL_KEYS.API_KEY_ANTHROPIC,
@@ -178,6 +185,17 @@ async function hasAnyApiKey(): Promise<boolean> {
   return pairs.some(([, v]) => !!v);
 }
 
+// ── Insights (IA) cache ────────────────────────────────────
+// Evita gerar insights via IA a cada abertura da tela — só regenera se os
+// dados mudaram (novo count) ou o dia virou, a menos que force=true (pull-to-refresh).
+async function getCachedInsights(): Promise<InsightsCache | null> {
+  const raw = await AsyncStorage.getItem(LOCAL_KEYS.INSIGHTS_CACHE);
+  return raw ? JSON.parse(raw) : null;
+}
+async function saveCachedInsights(cache: InsightsCache): Promise<void> {
+  await AsyncStorage.setItem(LOCAL_KEYS.INSIGHTS_CACHE, JSON.stringify(cache));
+}
+
 // Popula o cache local (AsyncStorage) a partir do provedor/chaves salvos no
 // perfil do servidor - roda no login/startup para que o usuário não precise
 // reconfigurar a chave da IA a cada reinstalação/novo aparelho.
@@ -200,4 +218,5 @@ export const storage = {
   getMealPlan, saveMealPlan, getCheckins, checkInMeal, extractMealsFromPdf,
   getApiKey, saveApiKey, hasAnyApiKey,
   getProvider, saveProvider,
+  getCachedInsights, saveCachedInsights,
 };

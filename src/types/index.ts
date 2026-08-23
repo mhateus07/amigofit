@@ -41,6 +41,13 @@ export interface Conversation {
 
 export type AIProvider = 'anthropic' | 'openai' | 'gemini' | 'groq';
 
+export interface AiInsight {
+  icon: string;
+  title: string;
+  description: string;
+  severity: 'positive' | 'warning' | 'neutral';
+}
+
 export interface Meal {
   id: string;
   name: string;

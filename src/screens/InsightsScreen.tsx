@@ -6,22 +6,37 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { format, subDays, isAfter, startOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { ExtractedData, UserProfile } from '../types';
+import { ExtractedData, UserProfile, AiInsight } from '../types';
 import { storage } from '../services/storage';
+import { AIService } from '../services/ai';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../constants/categories';
 
 const { width } = Dimensions.get('window');
 const CHART_WIDTH = width - spacing.md * 2 - spacing.md * 2; // screen - list padding - card padding
 
+const aiService = new AIService();
+
 interface Insight { icon: string; title: string; description: string; color: string; severity: 'positive' | 'warning' | 'neutral' }
+
+const SEVERITY_COLOR: Record<Insight['severity'], string> = {
+  positive: colors.primary,
+  warning: colors.warning,
+  neutral: '#9C7FE8',
+};
+
+function aiToInsight(i: AiInsight): Insight {
+  return { icon: i.icon, title: i.title, description: i.description, color: SEVERITY_COLOR[i.severity], severity: i.severity };
+}
 
 function extractHours(value: string): number | null {
   const m = value.match(/(\d+([.,]\d+)?)/);
   return m ? parseFloat(m[1].replace(',', '.')) : null;
 }
 
-function generateInsights(data: ExtractedData[]): Insight[] {
+// Fallback usado quando não há IA configurada, os dados ainda são poucos,
+// ou a geração via IA falha (offline, rate limit, chave inválida etc).
+function generateHeuristicInsights(data: ExtractedData[]): Insight[] {
   const insights: Insight[] = [];
   const last30 = data.filter((d) => isAfter(d.timestamp, subDays(Date.now(), 30)));
 
@@ -457,16 +472,48 @@ export default function InsightsScreen() {
   const [data, setData] = useState<ExtractedData[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [aiInsights, setAiInsights] = useState<Insight[] | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
 
-  const load = async () => {
+  const loadInsights = async (currentData: ExtractedData[], currentProfile: UserProfile | null, force: boolean) => {
+    if (currentData.length < 3) { setAiInsights(null); return; }
+    if (!(await storage.hasAnyApiKey())) { setAiInsights(null); return; }
+
+    const today = format(new Date(), 'yyyy-MM-dd');
+    if (!force) {
+      const cached = await storage.getCachedInsights();
+      if (cached && cached.date === today && cached.count === currentData.length) {
+        setAiInsights(cached.insights.map(aiToInsight));
+        return;
+      }
+    }
+
+    setInsightsLoading(true);
+    try {
+      const generated = await aiService.generateInsights(currentData, currentProfile);
+      if (generated.length > 0) {
+        await storage.saveCachedInsights({ date: today, count: currentData.length, insights: generated });
+        setAiInsights(generated.map(aiToInsight));
+      } else {
+        setAiInsights(null);
+      }
+    } catch {
+      setAiInsights(null);
+    } finally {
+      setInsightsLoading(false);
+    }
+  };
+
+  const refreshData = async (force: boolean) => {
     const [d, p] = await Promise.all([storage.getExtractedData(), storage.getProfile()]);
     setData(d);
     setProfile(p);
+    await loadInsights(d, p, force);
   };
-  useEffect(() => { load(); }, []);
-  const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  useEffect(() => { refreshData(false); }, []);
+  const onRefresh = async () => { setRefreshing(true); await refreshData(true); setRefreshing(false); };
 
-  const insights = generateInsights(data);
+  const insights = aiInsights ?? generateHeuristicInsights(data);
   const last30 = data.filter((d) => isAfter(d.timestamp, subDays(Date.now(), 30)));
 
   const statsItems = [
@@ -494,7 +541,12 @@ export default function InsightsScreen() {
     { type: 'weekly' },
     { type: 'dayOfWeek' },
     { type: 'categories' },
-    { type: 'sectionTitle', title: `${insights.length} insight${insights.length !== 1 ? 's' : ''} identificado${insights.length !== 1 ? 's' : ''}` },
+    {
+      type: 'sectionTitle',
+      title: insightsLoading
+        ? 'Gerando insights com IA...'
+        : `${insights.length} insight${insights.length !== 1 ? 's' : ''} identificado${insights.length !== 1 ? 's' : ''}${aiInsights ? ' · IA' : ''}`,
+    },
     ...insights.map((insight) => ({ type: 'insight' as const, insight })),
     { type: 'share' },
   ];
