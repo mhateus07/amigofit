@@ -155,6 +155,39 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
 
 ---
 
+## Integração Apple Saúde (HealthKit) — 2026-08-26
+
+- `src/services/appleHealth.ts`: sincroniza sono, passos, treinos, peso e frequência cardíaca do Apple Saúde (iOS) para o Diário/Insights — mesmo padrão de `healthConnect.ts` (Android).
+- Lib `@kingstinct/react-native-healthkit` (+ `react-native-nitro-modules`), config plugin no `app.json`, card na aba Perfil visível só em `Platform.OS === 'ios'`.
+- Motivo da prioridade sobre o Health Connect: uso diário real do app passou a ser no iPhone do usuário.
+
+---
+
+## Lembretes locais de treino — 2026-08-26
+
+- `src/services/reminders.ts`: agenda notificação local diária (`expo-notifications`, trigger `DAILY`) sem depender de push remoto — funciona com conta Apple pessoal/gratuita.
+- Seção "Lembrete de treino" do Perfil ganhou toggle + seletor de horário, substituindo o placeholder "Em breve"; `saveProfile` também parou de gravar `notificationEnabled`/`notificationTime` fixos (`false`/`'07:00'`) — bug encontrado de passagem.
+- Plugin `expo-notifications` reativado no `app.json` só para as usage strings/ícone; a entitlement `aps-environment` que ele injeta precisa ser removida manualmente do `.entitlements` depois de cada `expo prebuild` (ver ESCOPO.md).
+
+---
+
+## Gamificação: conquistas — 2026-08-26
+
+- `src/utils/achievements.ts`: 8 conquistas calculadas 100% no cliente a partir de dados já existentes (mensagens + Diário) — primeira mensagem, streaks de 3/7/30 dias, 10 treinos, semana de sono completa, 50/100 registros. Sem mudança de schema/backend.
+- Nova seção "Conquistas" na aba Insights, logo abaixo dos cards de estatísticas: grid 2 colunas, cada badge com ícone, progresso (`X/Y`) e barra de progresso; ícone/barra ficam esmaecidos enquanto bloqueada.
+- 5 testes novos em `src/utils/__tests__/achievements.test.ts` (49/49 no total).
+
+---
+
+## Export de dados (CSV/PDF) — 2026-08-27
+
+- Aba Insights ganhou "Exportar CSV" e "Exportar PDF", ao lado do "Compartilhar relatório semanal" — exportam o histórico completo do Diário, não só os últimos 30 dias.
+- CSV: monta a string na mão (com escape de vírgula/aspas/quebra de linha) e compartilha via `expo-sharing`, mesmo padrão já usado pro relatório semanal em texto.
+- PDF: `expo-print` (`Print.printToFileAsync`) renderiza uma tabela HTML simples (data, categoria, rótulo, valor) e compartilha o arquivo gerado.
+- Novo pod nativo (`ExpoPrint`) — precisou prebuild + remoção manual de `aps-environment` de novo (ver ESCOPO.md).
+
+---
+
 ## Próximos passos sugeridos
 
 - [ ] Substituir `assets/icon.png` e `assets/adaptive-icon.png` pelo ícone gerado no Lovart

@@ -9,12 +9,15 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UserProfile, AIProvider } from '../types';
 import { storage, getProvider, saveProvider } from '../services/storage';
 import { reprocessHistory } from '../services/reprocess';
 import { syncHealthConnect, getLastSyncTime } from '../services/healthConnect';
+import { syncAppleHealth, getLastAppleHealthSyncTime } from '../services/appleHealth';
+import { scheduleWorkoutReminder, cancelWorkoutReminder } from '../services/reminders';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
 const PROVIDER_INFO: Record<AIProvider, { label: string; icon: string; prefix: string; hint: string; model: string }> = {
@@ -80,6 +83,9 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
   const [height, setHeight] = useState(profile?.height?.toString() ?? '');
   const [weeklyWorkoutGoal, setWeeklyWorkoutGoal] = useState(profile?.weeklyWorkoutGoal ?? 3);
   const [sleepGoal, setSleepGoal] = useState(profile?.sleepGoal ?? 8);
+  const [notificationEnabled, setNotificationEnabled] = useState(profile?.notificationEnabled ?? false);
+  const [notificationTime, setNotificationTime] = useState(profile?.notificationTime ?? '19:00');
+  const [reminderSaving, setReminderSaving] = useState(false);
 
   // Provider & keys
   const [provider, setProvider] = useState<AIProvider>('anthropic');
@@ -93,6 +99,8 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
   const [reprocessProgress, setReprocessProgress] = useState('');
   const [healthSyncing, setHealthSyncing] = useState(false);
   const [healthLastSync, setHealthLastSync] = useState<Date | null>(null);
+  const [appleHealthSyncing, setAppleHealthSyncing] = useState(false);
+  const [appleHealthLastSync, setAppleHealthLastSync] = useState<Date | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -108,6 +116,10 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
       if (Platform.OS === 'android') {
         const lastSync = await getLastSyncTime();
         setHealthLastSync(lastSync);
+      }
+      if (Platform.OS === 'ios') {
+        const lastSync = await getLastAppleHealthSyncTime();
+        setAppleHealthLastSync(lastSync);
       }
     })();
   }, []);
@@ -197,6 +209,73 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
     }
   };
 
+  const handleAppleHealthSync = async () => {
+    setAppleHealthSyncing(true);
+    try {
+      const result = await syncAppleHealth();
+      if (result.error) {
+        Alert.alert('Apple Saúde', result.error);
+      } else {
+        const msg = result.synced > 0
+          ? `${result.synced} registro(s) importado(s) para o Diário e Insights.`
+          : 'Nenhum dado novo encontrado desde a última sincronização.';
+        Alert.alert('Sincronizado!', msg);
+        const lastSync = await getLastAppleHealthSyncTime();
+        setAppleHealthLastSync(lastSync);
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível sincronizar com o Apple Saúde.');
+    } finally {
+      setAppleHealthSyncing(false);
+    }
+  };
+
+  const persistNotificationSettings = async (enabled: boolean, time: string) => {
+    if (!profile) return;
+    const updated: UserProfile = { ...profile, notificationEnabled: enabled, notificationTime: time };
+    onProfileUpdate(updated);
+    await storage.saveProfile(updated);
+  };
+
+  const handleToggleReminder = async (value: boolean) => {
+    setReminderSaving(true);
+    try {
+      if (value) {
+        const result = await scheduleWorkoutReminder(notificationTime);
+        if (!result.ok) {
+          Alert.alert('Não foi possível ativar', result.error ?? 'Erro desconhecido.');
+          setReminderSaving(false);
+          return;
+        }
+      } else {
+        await cancelWorkoutReminder();
+      }
+      setNotificationEnabled(value);
+      await persistNotificationSettings(value, notificationTime);
+    } finally {
+      setReminderSaving(false);
+    }
+  };
+
+  const handleReminderTimeChange = async (time: string) => {
+    setNotificationTime(time);
+    if (notificationEnabled) {
+      setReminderSaving(true);
+      try {
+        const result = await scheduleWorkoutReminder(time);
+        if (!result.ok) {
+          Alert.alert('Não foi possível atualizar', result.error ?? 'Erro desconhecido.');
+          return;
+        }
+        await persistNotificationSettings(true, time);
+      } finally {
+        setReminderSaving(false);
+      }
+    } else {
+      await persistNotificationSettings(false, time);
+    }
+  };
+
   const handleLogout = () => {
     Alert.alert('Sair', 'Tem certeza que deseja sair da sua conta?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -218,8 +297,8 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
       height: height ? parseInt(height, 10) : undefined,
       weeklyWorkoutGoal,
       sleepGoal,
-      notificationEnabled: false,
-      notificationTime: '07:00',
+      notificationEnabled,
+      notificationTime,
       onboardingComplete: true,
     };
     await storage.saveProfile(updated);
@@ -434,12 +513,33 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
         {/* Notificações */}
         <View style={styles.section}>
           <SectionHeader title="Lembrete de treino" />
-          <Text style={styles.sectionDesc}>
-            Lembretes diários estarão disponíveis na versão completa do app.
-          </Text>
-          <View style={styles.comingSoonBadge}>
-            <Text style={styles.comingSoonText}>Em breve</Text>
+          <View style={styles.reminderToggleRow}>
+            <Text style={[styles.sectionDesc, styles.reminderDescText]}>
+              Notificação diária pra você registrar treino, refeições ou como tá se sentindo.
+            </Text>
+            <Switch
+              value={notificationEnabled}
+              onValueChange={handleToggleReminder}
+              disabled={reminderSaving}
+              trackColor={{ false: colors.border, true: colors.primary }}
+            />
           </View>
+          {notificationEnabled && (
+            <View style={styles.optionRow}>
+              {['07:00', '12:00', '19:00', '21:00'].map((t) => (
+                <TouchableOpacity
+                  key={t}
+                  style={[styles.optionBtn, notificationTime === t && styles.optionBtnActive]}
+                  onPress={() => handleReminderTimeChange(t)}
+                  disabled={reminderSaving}
+                >
+                  <Text style={[styles.optionText, notificationTime === t && styles.optionTextActive]}>
+                    {t}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </View>
 
         {/* Samsung Health / Google Fit */}
@@ -474,6 +574,42 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
             </TouchableOpacity>
             <Text style={styles.healthNote}>
               Requer build nativo (expo run:android). Compatível com Samsung Health, Google Fit e qualquer app que sincronize com Health Connect.
+            </Text>
+          </View>
+        )}
+
+        {/* Apple Saúde (iOS) */}
+        {Platform.OS === 'ios' && (
+          <View style={styles.section}>
+            <SectionHeader title="Apple Saúde" />
+            <Text style={styles.sectionDesc}>
+              Importa sono, passos, treinos, peso e frequência cardíaca do Apple Saúde diretamente para o Diário e Insights, sem precisar digitar nada.
+            </Text>
+            {appleHealthLastSync && (
+              <Text style={styles.lastSyncText}>
+                Última sync: {appleHealthLastSync.toLocaleString('pt-BR', {
+                  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                })}
+              </Text>
+            )}
+            <TouchableOpacity
+              style={[styles.healthSyncBtn, appleHealthSyncing && styles.reprocessBtnDisabled]}
+              onPress={handleAppleHealthSync}
+              disabled={appleHealthSyncing}
+            >
+              {appleHealthSyncing ? (
+                <View style={styles.reprocessRow}>
+                  <ActivityIndicator size="small" color="#000" />
+                  <Text style={styles.healthSyncBtnText}>Sincronizando...</Text>
+                </View>
+              ) : (
+                <Text style={styles.healthSyncBtnText}>
+                  {appleHealthLastSync ? 'Sincronizar agora' : 'Conectar e sincronizar'}
+                </Text>
+              )}
+            </TouchableOpacity>
+            <Text style={styles.healthNote}>
+              Requer build nativo (expo run:ios). Compatível com qualquer app que sincronize com o Apple Saúde (Apple Watch, Strava, etc.).
             </Text>
           </View>
         )}
@@ -597,13 +733,11 @@ const styles = StyleSheet.create({
   counterValue: { color: colors.text, fontSize: fontSize.lg, fontWeight: '700', minWidth: 60, textAlign: 'center' },
   counterUnit: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '400' },
 
-  // Notificações (em breve)
-  comingSoonBadge: {
-    alignSelf: 'flex-start', backgroundColor: colors.surfaceElevated,
-    borderRadius: radius.full, paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs, borderWidth: 1, borderColor: colors.border,
+  // Notificações
+  reminderToggleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md,
   },
-  comingSoonText: { color: colors.textMuted, fontSize: fontSize.sm, fontWeight: '600' },
+  reminderDescText: { flex: 1, marginBottom: 0 },
 
   // Save
   saveBtn: {

@@ -36,6 +36,13 @@
             "usesCleartextTraffic": true
           }
         }
+      ],
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "Permite importar sono, passos, treinos, peso e frequência cardíaca do Apple Saúde para o Diário e Insights, sem precisar digitar nada.",
+          "NSHealthUpdateUsageDescription": "Permite importar sono, passos, treinos, peso e frequência cardíaca do Apple Saúde para o Diário e Insights, sem precisar digitar nada."
+        }
       ]
     ],
     "splash": {
@@ -47,7 +54,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Permite enviar fotos e prints para o AmigoFit analisar."
-      }
+      },
+      "bundleIdentifier": "com.mhateus07.amigofit"
     },
     "android": {
       "adaptiveIcon": {

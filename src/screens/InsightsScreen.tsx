@@ -4,13 +4,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Polyline, Circle, Text as SvgText, Line as SvgLine } from 'react-native-svg';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Print from 'expo-print';
 import { format, subDays, isAfter, startOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { ExtractedData, UserProfile, AiInsight } from '../types';
+import { ExtractedData, UserProfile, AiInsight, Message } from '../types';
 import { storage } from '../services/storage';
 import { AIService } from '../services/ai';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../constants/categories';
+import { computeAchievements } from '../utils/achievements';
 
 const { width } = Dimensions.get('window');
 const CHART_WIDTH = width - spacing.md * 2 - spacing.md * 2; // screen - list padding - card padding
@@ -411,6 +413,33 @@ function GoalsSection({ data, profile }: { data: ExtractedData[]; profile: UserP
   );
 }
 
+// ── Conquistas ─────────────────────────────────────────────
+function AchievementsSection({ messages, data }: { messages: Message[]; data: ExtractedData[] }) {
+  const achievements = computeAchievements(messages, data);
+  const unlockedCount = achievements.filter((a) => a.unlocked).length;
+
+  return (
+    <View style={styles.achievementsCard}>
+      <View style={styles.achievementsHeader}>
+        <Text style={styles.sectionLabel}>Conquistas</Text>
+        <Text style={styles.achievementsCount}>{unlockedCount}/{achievements.length}</Text>
+      </View>
+      <View style={styles.achievementsGrid}>
+        {achievements.map((a) => (
+          <View key={a.id} style={[styles.achievementBadge, !a.unlocked && styles.achievementBadgeLocked]}>
+            <Text style={[styles.achievementIcon, !a.unlocked && styles.achievementIconLocked]}>{a.icon}</Text>
+            <Text style={styles.achievementTitle} numberOfLines={2}>{a.title}</Text>
+            <Text style={styles.achievementDesc}>{a.description}</Text>
+            <View style={styles.achievementTrack}>
+              <View style={[styles.achievementFill, { width: `${a.progress * 100}%` }, !a.unlocked && styles.achievementFillLocked]} />
+            </View>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 // ── Card de insight ────────────────────────────────────────
 function StatCard({ icon, value, label, color }: { icon: string; value: number; label: string; color: string }) {
   return (
@@ -467,9 +496,82 @@ async function shareWeeklyReport(data: ExtractedData[]) {
   }
 }
 
+function csvEscape(value: string): string {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+async function exportDataAsCsv(data: ExtractedData[]) {
+  try {
+    const isAvailable = await Sharing.isAvailableAsync();
+    if (!isAvailable) { Alert.alert('Compartilhamento não disponível neste dispositivo.'); return; }
+    if (data.length === 0) { Alert.alert('Sem dados', 'Ainda não há registros para exportar.'); return; }
+
+    const sorted = [...data].sort((a, b) => a.timestamp - b.timestamp);
+    const header = ['Data', 'Categoria', 'Rótulo', 'Valor', 'Texto original'];
+    const rows = sorted.map((d) => [
+      format(d.timestamp, 'dd/MM/yyyy HH:mm', { locale: ptBR }),
+      CATEGORY_CONFIG[d.category]?.label ?? d.category,
+      d.label,
+      d.value,
+      d.rawText,
+    ]);
+    const csv = [header, ...rows].map((row) => row.map(csvEscape).join(',')).join('\n');
+
+    const path = FileSystem.cacheDirectory + 'amigofit_dados.csv';
+    await FileSystem.writeAsStringAsync(path, csv, { encoding: FileSystem.EncodingType.UTF8 });
+    await Sharing.shareAsync(path, { mimeType: 'text/csv', dialogTitle: 'Exportar dados (CSV)' });
+  } catch {
+    Alert.alert('Erro ao exportar CSV. Tente novamente.');
+  }
+}
+
+async function exportDataAsPdf(data: ExtractedData[], profile: UserProfile | null) {
+  try {
+    if (data.length === 0) { Alert.alert('Sem dados', 'Ainda não há registros para exportar.'); return; }
+
+    const sorted = [...data].sort((a, b) => b.timestamp - a.timestamp);
+    const rows = sorted.map((d) => `
+      <tr>
+        <td>${format(d.timestamp, 'dd/MM/yyyy HH:mm', { locale: ptBR })}</td>
+        <td>${CATEGORY_CONFIG[d.category]?.icon ?? ''} ${CATEGORY_CONFIG[d.category]?.label ?? d.category}</td>
+        <td>${d.label}</td>
+        <td>${d.value}</td>
+      </tr>`).join('');
+
+    const html = `
+      <html>
+        <head><meta charset="utf-8" />
+          <style>
+            body { font-family: -apple-system, Helvetica, sans-serif; color: #222; padding: 24px; }
+            h1 { font-size: 20px; margin-bottom: 4px; }
+            .sub { color: #666; font-size: 12px; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+            th { background: #f5f5f5; }
+          </style>
+        </head>
+        <body>
+          <h1>Relatório AmigoFit${profile?.name ? ' — ' + profile.name : ''}</h1>
+          <div class="sub">Gerado em ${format(Date.now(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })} · ${data.length} registro(s)</div>
+          <table>
+            <thead><tr><th>Data</th><th>Categoria</th><th>Rótulo</th><th>Valor</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </body>
+      </html>`;
+
+    const { uri } = await Print.printToFileAsync({ html, base64: false });
+    await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Exportar dados (PDF)' });
+  } catch {
+    Alert.alert('Erro ao exportar PDF. Tente novamente.');
+  }
+}
+
 // ── Tela principal ─────────────────────────────────────────
 export default function InsightsScreen() {
   const [data, setData] = useState<ExtractedData[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [aiInsights, setAiInsights] = useState<Insight[] | null>(null);
@@ -505,9 +607,10 @@ export default function InsightsScreen() {
   };
 
   const refreshData = async (force: boolean) => {
-    const [d, p] = await Promise.all([storage.getExtractedData(), storage.getProfile()]);
+    const [d, p, m] = await Promise.all([storage.getExtractedData(), storage.getProfile(), storage.getMessages()]);
     setData(d);
     setProfile(p);
+    setMessages(m);
     await loadInsights(d, p, force);
   };
   useEffect(() => { refreshData(false); }, []);
@@ -525,6 +628,7 @@ export default function InsightsScreen() {
 
   type ListItem =
     | { type: 'stats' }
+    | { type: 'achievements' }
     | { type: 'goals' }
     | { type: 'sleepChart' }
     | { type: 'weekly' }
@@ -532,10 +636,12 @@ export default function InsightsScreen() {
     | { type: 'categories' }
     | { type: 'sectionTitle'; title: string }
     | { type: 'insight'; insight: Insight }
-    | { type: 'share' };
+    | { type: 'share' }
+    | { type: 'export' };
 
   const listData: ListItem[] = [
     { type: 'stats' },
+    { type: 'achievements' },
     { type: 'goals' },
     { type: 'sleepChart' },
     { type: 'weekly' },
@@ -549,6 +655,7 @@ export default function InsightsScreen() {
     },
     ...insights.map((insight) => ({ type: 'insight' as const, insight })),
     { type: 'share' },
+    { type: 'export' },
   ];
 
   return (
@@ -566,6 +673,7 @@ export default function InsightsScreen() {
               {statsItems.map((s) => <StatCard key={s.label} {...s} />)}
             </View>
           );
+          if (item.type === 'achievements') return <AchievementsSection messages={messages} data={data} />;
           if (item.type === 'goals') return <GoalsSection data={data} profile={profile} />;
           if (item.type === 'sleepChart') return (
             <View style={styles.chartCard}>
@@ -583,6 +691,18 @@ export default function InsightsScreen() {
               <Text style={styles.shareIcon}>↑</Text>
               <Text style={styles.shareBtnText}>Compartilhar relatório semanal</Text>
             </TouchableOpacity>
+          );
+          if (item.type === 'export') return (
+            <View style={styles.exportRow}>
+              <TouchableOpacity style={[styles.shareBtn, styles.exportBtn]} onPress={() => exportDataAsCsv(data)} activeOpacity={0.8}>
+                <Text style={styles.shareIcon}>⇩</Text>
+                <Text style={styles.shareBtnText}>Exportar CSV</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.shareBtn, styles.exportBtn]} onPress={() => exportDataAsPdf(data, profile)} activeOpacity={0.8}>
+                <Text style={styles.shareIcon}>⇩</Text>
+                <Text style={styles.shareBtnText}>Exportar PDF</Text>
+              </TouchableOpacity>
+            </View>
           );
           return null;
         }}
@@ -607,6 +727,21 @@ const styles = StyleSheet.create({
   statIcon:     { fontSize: 20, marginBottom: 4 },
   statValue:    { fontSize: fontSize.xl, fontWeight: '800' },
   statLabel:    { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
+
+  // Conquistas
+  achievementsCard:   { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md },
+  achievementsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
+  achievementsCount:  { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '700' },
+  achievementsGrid:   { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  achievementBadge:   { width: '47%', backgroundColor: colors.surfaceElevated, borderRadius: radius.md, padding: spacing.sm, gap: 4 },
+  achievementBadgeLocked: { opacity: 0.5 },
+  achievementIcon:    { fontSize: 20 },
+  achievementIconLocked: { opacity: 0.6 },
+  achievementTitle:   { color: colors.text, fontSize: fontSize.xs, fontWeight: '700' },
+  achievementDesc:    { color: colors.textSecondary, fontSize: fontSize.xs },
+  achievementTrack:   { height: 4, backgroundColor: colors.border, borderRadius: radius.full, overflow: 'hidden', marginTop: 2 },
+  achievementFill:    { height: '100%', borderRadius: radius.full, backgroundColor: colors.primary },
+  achievementFillLocked: { backgroundColor: colors.textMuted },
 
   // Goals
   goalsCard:    { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md },
@@ -674,4 +809,6 @@ const styles = StyleSheet.create({
   },
   shareIcon: { color: colors.primary, fontSize: fontSize.lg, fontWeight: '700' },
   shareBtnText: { color: colors.primary, fontSize: fontSize.md, fontWeight: '600' },
+  exportRow: { flexDirection: 'row', gap: spacing.sm },
+  exportBtn: { flex: 1, marginTop: 0 },
 });
