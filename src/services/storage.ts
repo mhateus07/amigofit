@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin, AiInsight } from '../types';
 
 export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://amigofit-api.impulsiodigital.com';
@@ -27,15 +28,38 @@ const PROVIDER_KEY_MAP: Record<AIProvider, string> = {
   groq: LOCAL_KEYS.API_KEY_GROQ,
 };
 
+// ── Secure storage (token + chaves de API) ─────────────────
+// Token JWT e chaves de API de IA são dados sensíveis: ficam no Keychain
+// (iOS) / Keystore (Android) via expo-secure-store, nunca em AsyncStorage
+// (que não é criptografado). getSecure migra automaticamente qualquer valor
+// remanescente de uma versão anterior do app que ainda usava AsyncStorage.
+async function getSecure(key: string): Promise<string | null> {
+  const value = await SecureStore.getItemAsync(key);
+  if (value !== null) return value;
+  const legacy = await AsyncStorage.getItem(key);
+  if (legacy !== null) {
+    await SecureStore.setItemAsync(key, legacy);
+    await AsyncStorage.removeItem(key);
+  }
+  return legacy;
+}
+async function setSecure(key: string, value: string): Promise<void> {
+  await SecureStore.setItemAsync(key, value);
+}
+async function deleteSecure(key: string): Promise<void> {
+  await SecureStore.deleteItemAsync(key);
+  await AsyncStorage.removeItem(key);
+}
+
 // ── Auth token ────────────────────────────────────────────
 export async function getToken(): Promise<string | null> {
-  return AsyncStorage.getItem(LOCAL_KEYS.TOKEN);
+  return getSecure(LOCAL_KEYS.TOKEN);
 }
 export async function saveToken(token: string): Promise<void> {
-  await AsyncStorage.setItem(LOCAL_KEYS.TOKEN, token);
+  await setSecure(LOCAL_KEYS.TOKEN, token);
 }
 export async function clearToken(): Promise<void> {
-  await AsyncStorage.multiRemove([LOCAL_KEYS.TOKEN, LOCAL_KEYS.USER]);
+  await Promise.all([deleteSecure(LOCAL_KEYS.TOKEN), AsyncStorage.removeItem(LOCAL_KEYS.USER)]);
 }
 
 export async function getStoredUser(): Promise<{ id: string; name: string; email: string } | null> {
@@ -58,7 +82,7 @@ export async function saveProvider(p: AIProvider): Promise<void> {
 export async function authHeaders(): Promise<Record<string, string>> {
   const token = await getToken();
   const provider = await getProvider();
-  const apiKey = await AsyncStorage.getItem(PROVIDER_KEY_MAP[provider]);
+  const apiKey = await getSecure(PROVIDER_KEY_MAP[provider]);
   const h: Record<string, string> = { 'Content-Type': 'application/json', 'x-provider': provider };
   if (token) h['Authorization'] = `Bearer ${token}`;
   if (apiKey) h['x-api-key'] = apiKey;
@@ -174,15 +198,15 @@ async function extractMealsFromPdf(pdfBase64: string): Promise<{ meals: Omit<Mea
 // ── API Key (per-provider) ────────────────────────────────
 async function getApiKey(provider?: AIProvider): Promise<string | null> {
   const p = provider ?? await getProvider();
-  return AsyncStorage.getItem(PROVIDER_KEY_MAP[p]);
+  return getSecure(PROVIDER_KEY_MAP[p]);
 }
 async function saveApiKey(key: string, provider?: AIProvider): Promise<void> {
   const p = provider ?? await getProvider();
-  await AsyncStorage.setItem(PROVIDER_KEY_MAP[p], key);
+  await setSecure(PROVIDER_KEY_MAP[p], key);
 }
 async function hasAnyApiKey(): Promise<boolean> {
-  const pairs = await AsyncStorage.multiGet(Object.values(PROVIDER_KEY_MAP));
-  return pairs.some(([, v]) => !!v);
+  const values = await Promise.all(Object.values(PROVIDER_KEY_MAP).map(getSecure));
+  return values.some((v) => !!v);
 }
 
 // ── Insights (IA) cache ────────────────────────────────────
@@ -196,9 +220,9 @@ async function saveCachedInsights(cache: InsightsCache): Promise<void> {
   await AsyncStorage.setItem(LOCAL_KEYS.INSIGHTS_CACHE, JSON.stringify(cache));
 }
 
-// Popula o cache local (AsyncStorage) a partir do provedor/chaves salvos no
-// perfil do servidor - roda no login/startup para que o usuário não precise
-// reconfigurar a chave da IA a cada reinstalação/novo aparelho.
+// Popula o cache local (provider em AsyncStorage, chaves no SecureStore) a
+// partir do perfil salvo no servidor - roda no login/startup para que o
+// usuário não precise reconfigurar a chave da IA a cada reinstalação/novo aparelho.
 export async function hydrateAiConfigFromProfile(profile: UserProfile | null): Promise<void> {
   if (!profile) return;
   const tasks: Promise<void>[] = [];

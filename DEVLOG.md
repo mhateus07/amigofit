@@ -11,7 +11,7 @@ Registro de tudo que foi desenvolvido no projeto até agora.
 - **Banco de dados:** PostgreSQL via Docker Compose
 - **IA:** Anthropic Claude API (`claude-sonnet-4-6`) — chat e extração de dados
 - **Auth:** JWT + bcrypt
-- **Storage local:** AsyncStorage (token, API key)
+- **Storage local:** AsyncStorage (dados não sensíveis) + expo-secure-store/Keychain (token JWT, API keys)
 - **Teste mobile:** Expo Go (iPhone via QR Code)
 
 ---
@@ -185,6 +185,14 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
 - CSV: monta a string na mão (com escape de vírgula/aspas/quebra de linha) e compartilha via `expo-sharing`, mesmo padrão já usado pro relatório semanal em texto.
 - PDF: `expo-print` (`Print.printToFileAsync`) renderiza uma tabela HTML simples (data, categoria, rótulo, valor) e compartilha o arquivo gerado.
 - Novo pod nativo (`ExpoPrint`) — precisou prebuild + remoção manual de `aps-environment` de novo (ver ESCOPO.md).
+
+---
+
+## Segurança: token e API keys movidos para o Keychain — 2026-09-07
+
+- `src/services/storage.ts`: token JWT e as 4 chaves de API (Anthropic/OpenAI/Gemini/Groq) agora ficam no `expo-secure-store` (Keychain no iOS), não mais em `AsyncStorage` (texto puro no sandbox do app). Achado numa revisão de código pedida pelo usuário.
+- Migração automática e transparente: `getSecure()` lê primeiro do SecureStore; se vazio, busca o valor antigo no AsyncStorage, grava no SecureStore e apaga do AsyncStorage — usuário não perde a chave já configurada nem precisa digitar de novo.
+- Novo pod nativo (`ExpoSecureStore`) — precisou `expo prebuild` + remoção manual de `aps-environment` de novo (mesma pegadinha de sempre, ver ESCOPO.md). Validado no iPhone físico: chave de API preservada após a migração, chat funcionando.
 
 ---
 

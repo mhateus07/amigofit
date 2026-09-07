@@ -77,6 +77,7 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 14 | Backend em HTTP puro, sem TLS (chaves de API de IA trafegando sem criptografia) | VPS de produção | ✅ Corrigido em 2026-07-17 — HTTPS via Traefik/EasyPanel + Let's Encrypt (`amigofit-api.impulsiodigital.com`), porta 3001 HTTP fechada |
 | 15 | Deploy manual multi-passo via SSH, sem script | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/deploy.sh` |
 | 16 | Sem backup do banco de produção | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/backup-db.sh` via cron diário, retenção de 14 dias |
+| 17 | Token JWT e chaves de API de IA em `AsyncStorage` (texto puro, sem criptografia) | `src/services/storage.ts` | ✅ Corrigido em 2026-09-07 — migrado para `expo-secure-store` (Keychain), migração automática dos valores já salvos |
 
 ---
 

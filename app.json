@@ -43,7 +43,8 @@
           "NSHealthShareUsageDescription": "Permite importar sono, passos, treinos, peso e frequência cardíaca do Apple Saúde para o Diário e Insights, sem precisar digitar nada.",
           "NSHealthUpdateUsageDescription": "Permite importar sono, passos, treinos, peso e frequência cardíaca do Apple Saúde para o Diário e Insights, sem precisar digitar nada."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "splash": {
       "image": "./assets/splash-bg.png",
