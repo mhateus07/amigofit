@@ -483,6 +483,70 @@ Regras:
   return JSON.parse(responseText).meals || [];
 }
 
+const TRANSCRIPTION_MODELS = {
+  openai: 'whisper-1',
+  groq: 'whisper-large-v3-turbo',
+};
+
+function extensionFromMime(mimeType) {
+  if (mimeType?.includes('mp4') || mimeType?.includes('m4a')) return 'm4a';
+  if (mimeType?.includes('webm')) return 'webm';
+  if (mimeType?.includes('wav')) return 'wav';
+  return 'm4a';
+}
+
+async function transcribeWithProvider(config, audioBase64, mimeType) {
+  const { provider, apiKey } = config;
+
+  if (provider === 'anthropic') {
+    throw new Error('O provedor Anthropic não suporta transcrição de áudio. Configure uma chave OpenAI, Groq ou Gemini em Perfil → Configuração da IA.');
+  }
+
+  if (provider === 'openai' || provider === 'groq') {
+    const baseUrl = provider === 'groq'
+      ? 'https://api.groq.com/openai/v1'
+      : 'https://api.openai.com/v1';
+    const buffer = Buffer.from(audioBase64, 'base64');
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: mimeType || 'audio/m4a' }), `audio.${extensionFromMime(mimeType)}`);
+    form.append('model', TRANSCRIPTION_MODELS[provider]);
+    form.append('language', 'pt');
+    const res = await fetch(`${baseUrl}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    return (data.text || '').trim();
+  }
+
+  if (provider === 'gemini') {
+    const model = 'gemini-1.5-flash';
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: 'Transcreva literalmente o áudio a seguir em português brasileiro. Responda apenas com o texto transcrito, sem comentários nem formatação.' },
+              { inline_data: { mime_type: mimeType || 'audio/m4a', data: audioBase64 } },
+            ],
+          }],
+        }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    return (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+  }
+
+  throw new Error(`Provedor desconhecido: ${provider}`);
+}
+
 // ── Health ────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
@@ -790,6 +854,21 @@ app.post('/api/extract-meals', requireAuth, aiLimiter, async (req, res) => {
   } catch (e) {
     console.error('Extract meals error:', e.message);
     res.json({ meals: [], error: e.message });
+  }
+});
+
+// ── AI: Transcribe (voz para texto) ───────────────────────
+app.post('/api/transcribe', requireAuth, aiLimiter, async (req, res) => {
+  const config = getProviderConfig(req, res);
+  if (!config) return;
+  const { audioBase64, mimeType } = req.body;
+  if (!audioBase64) return res.status(400).json({ error: 'audioBase64 é obrigatório' });
+  try {
+    const text = await transcribeWithProvider(config, audioBase64, mimeType);
+    res.json({ text });
+  } catch (e) {
+    console.error('Transcribe error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

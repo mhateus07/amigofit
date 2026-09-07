@@ -19,6 +19,7 @@ import { ptBR } from 'date-fns/locale';
 import * as ImagePicker from 'expo-image-picker';
 import { Message, UserProfile } from '../types';
 import { useChat } from '../hooks/useChat';
+import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { calculateStreak } from '../utils/streak';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
@@ -117,12 +118,27 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
 export default function ChatScreen({ profile }: Props) {
   const { messages, isLoading, sendMessage, clearHistory } = useChat(profile);
   const [inputText, setInputText] = useState('');
   const [pendingImage, setPendingImage] = useState<{ uri: string; base64: string; mimeType: string } | null>(null);
   const listRef = useRef<FlatList>(null);
   const streak = calculateStreak(messages);
+  const {
+    isRecording,
+    isTranscribing,
+    durationMillis,
+    startRecording,
+    stopRecordingAndTranscribe,
+    cancelRecording,
+  } = useVoiceRecorder();
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -153,6 +169,13 @@ export default function ChatScreen({ profile }: Props) {
     sendMessage(inputText, pendingImage?.base64, pendingImage?.mimeType, pendingImage?.uri);
     setInputText('');
     setPendingImage(null);
+  };
+
+  const handleStopRecording = async () => {
+    const text = await stopRecordingAndTranscribe();
+    if (text) {
+      setInputText((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+    }
   };
 
   const quickPrompts = [
@@ -238,28 +261,51 @@ export default function ChatScreen({ profile }: Props) {
           </View>
         )}
 
-        <View style={styles.inputRow}>
-          <TouchableOpacity style={styles.imageBtn} onPress={handlePickImage} disabled={isLoading}>
-            <Text style={styles.imageBtnIcon}>🖼</Text>
-          </TouchableOpacity>
-          <TextInput
-            style={styles.input}
-            value={inputText}
-            onChangeText={setInputText}
-            placeholder="Conta como tá o treino..."
-            placeholderTextColor={colors.textMuted}
-            multiline
-            maxLength={1000}
-            returnKeyType="default"
-          />
-          <TouchableOpacity
-            style={[styles.sendBtn, (!inputText.trim() && !pendingImage || isLoading) && styles.sendBtnDisabled]}
-            onPress={handleSend}
-            disabled={(!inputText.trim() && !pendingImage) || isLoading}
-          >
-            <Text style={styles.sendIcon}>↑</Text>
-          </TouchableOpacity>
-        </View>
+        {isRecording ? (
+          <View style={styles.recordingRow}>
+            <TouchableOpacity style={styles.recordingCancelBtn} onPress={cancelRecording}>
+              <Text style={styles.recordingCancelIcon}>✕</Text>
+            </TouchableOpacity>
+            <View style={styles.recordingIndicator}>
+              <View style={styles.recordingDot} />
+              <Text style={styles.recordingTime}>{formatDuration(durationMillis)}</Text>
+              <Text style={styles.recordingHint}>Gravando...</Text>
+            </View>
+            <TouchableOpacity style={styles.recordingStopBtn} onPress={handleStopRecording}>
+              <Text style={styles.recordingStopIcon}>✓</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.inputRow}>
+            <TouchableOpacity style={styles.imageBtn} onPress={handlePickImage} disabled={isLoading || isTranscribing}>
+              <Text style={styles.imageBtnIcon}>🖼</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.imageBtn} onPress={startRecording} disabled={isLoading || isTranscribing}>
+              {isTranscribing ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Text style={styles.imageBtnIcon}>🎤</Text>
+              )}
+            </TouchableOpacity>
+            <TextInput
+              style={styles.input}
+              value={inputText}
+              onChangeText={setInputText}
+              placeholder="Conta como tá o treino..."
+              placeholderTextColor={colors.textMuted}
+              multiline
+              maxLength={1000}
+              returnKeyType="default"
+            />
+            <TouchableOpacity
+              style={[styles.sendBtn, (!inputText.trim() && !pendingImage || isLoading) && styles.sendBtnDisabled]}
+              onPress={handleSend}
+              disabled={(!inputText.trim() && !pendingImage) || isLoading}
+            >
+              <Text style={styles.sendIcon}>↑</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -418,4 +464,52 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: colors.surface },
   sendIcon: { color: '#000', fontSize: fontSize.lg, fontWeight: '700' },
+  recordingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.md,
+    paddingBottom: Platform.OS === 'ios' ? spacing.md : spacing.lg,
+    gap: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  recordingCancelBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recordingCancelIcon: { color: colors.textMuted, fontSize: fontSize.md, fontWeight: '700' },
+  recordingIndicator: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: radius.full,
+    backgroundColor: '#FF3B30',
+  },
+  recordingTime: { color: colors.text, fontSize: fontSize.md, fontWeight: '700' },
+  recordingHint: { color: colors.textMuted, fontSize: fontSize.sm },
+  recordingStopBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.full,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recordingStopIcon: { color: '#000', fontSize: fontSize.lg, fontWeight: '700' },
 });

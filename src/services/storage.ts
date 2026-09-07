@@ -89,6 +89,30 @@ export async function authHeaders(): Promise<Record<string, string>> {
   return h;
 }
 
+// Anthropic (Claude) não tem endpoint de transcrição de áudio — para o
+// ditado por voz, usamos o provedor ativo se ele suportar, senão caímos
+// para o primeiro provedor com chave configurada nesta ordem (Groq é o
+// mais rápido/barato para Whisper, depois OpenAI, depois Gemini).
+const TRANSCRIPTION_CAPABLE: AIProvider[] = ['groq', 'openai', 'gemini'];
+
+export async function authHeadersForTranscription(): Promise<Record<string, string> | null> {
+  const token = await getToken();
+  const active = await getProvider();
+  const order = TRANSCRIPTION_CAPABLE.includes(active)
+    ? [active, ...TRANSCRIPTION_CAPABLE.filter((p) => p !== active)]
+    : TRANSCRIPTION_CAPABLE;
+
+  for (const provider of order) {
+    const apiKey = await getSecure(PROVIDER_KEY_MAP[provider]);
+    if (apiKey) {
+      const h: Record<string, string> = { 'Content-Type': 'application/json', 'x-provider': provider, 'x-api-key': apiKey };
+      if (token) h['Authorization'] = `Bearer ${token}`;
+      return h;
+    }
+  }
+  return null;
+}
+
 // ── Messages ──────────────────────────────────────────────
 async function getMessages(): Promise<Message[]> {
   try {

@@ -44,7 +44,13 @@
           "NSHealthUpdateUsageDescription": "Permite importar sono, passos, treinos, peso e frequência cardíaca do Apple Saúde para o Diário e Insights, sem precisar digitar nada."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Permite gravar sua voz para transcrever e registrar no chat, sem precisar digitar."
+        }
+      ]
     ],
     "splash": {
       "image": "./assets/splash-bg.png",

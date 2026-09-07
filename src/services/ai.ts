@@ -1,7 +1,7 @@
 import { Message, UserProfile, ExtractedData, AiInsight } from '../types';
 import { format, subDays, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { API_BASE, authHeaders } from './storage';
+import { API_BASE, authHeaders, authHeadersForTranscription } from './storage';
 
 function buildDiaryContext(diaryData: ExtractedData[]): string {
   if (diaryData.length === 0) return '';
@@ -135,6 +135,26 @@ export class AIService {
     } catch {
       return [];
     }
+  }
+
+  async transcribeAudio(audioBase64: string, mimeType: string): Promise<string> {
+    const headers = await authHeadersForTranscription();
+    if (!headers) {
+      throw new Error('Nenhuma chave de IA compatível com transcrição encontrada. Configure OpenAI, Groq ou Gemini em Perfil → Configuração da IA.');
+    }
+
+    const res = await fetch(`${API_BASE}/api/transcribe`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ audioBase64, mimeType }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(data.error || 'Erro ao transcrever áudio');
+    }
+    const data = await res.json();
+    return data.text || '';
   }
 
   async generateInsights(data: ExtractedData[], profile: UserProfile | null): Promise<AiInsight[]> {

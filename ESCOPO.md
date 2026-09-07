@@ -117,6 +117,12 @@ Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos 
 - [x] Migrar insights de heurística para IA real — **implementado em 2026-08-22**: novo endpoint `POST /api/insights` (backend, multi-provedor, mesmo padrão de `/api/extract`) gera de 3-5 insights via LLM a partir dos dados dos últimos 30 dias + perfil. `InsightsScreen.tsx` usa a IA quando há chave configurada e ≥3 registros (com cache diário em AsyncStorage, ignorado no pull-to-refresh); cai de volta na heurística antiga (`generateHeuristicInsights`) se não houver chave, poucos dados, ou a chamada falhar. 8 testes novos (4 backend, 2 frontend + os 2 do fix anterior), 44/44 passando. Deployado no VPS em 2026-08-23 (push + `./scripts/deploy.sh`) e **confirmado pelo usuário funcionando end-to-end** via Expo Go: insights de IA aparecendo na aba Insights.
 - [ ] Avaliar streaming no chat (custo x benefício, registrar decisão aqui)
 
+### ⬜ Fase 5 — Aproveitando o "conversar" ao máximo
+Ideias levantadas em 2026-09-07 (ver seção 4 para as demais). Objetivo: reforçar o diferencial central do app (você não preenche formulário, você conversa) com formas mais ricas de conversar.
+- [ ] Consulta em linguagem natural sobre os próprios dados: perguntar "quantas vezes treinei perna esse mês?" ou "qual foi meu pior dia de sono?" e a IA responder consultando `extracted_data`/`workouts` direto (texto→SQL ou busca estruturada), em vez de só extrair dados novos
+- [ ] Entrada por voz/áudio no chat: gravar e transcrever (Whisper ou equivalente) para registrar logo após o treino sem digitar
+- [ ] Foto da refeição no chat: enviar imagem e a IA (vision) descrever/estimar a refeição, mesmo padrão de "não preencher formulário"
+
 ### ⬜ Fase 4 — Pendências de infraestrutura e produto
 - [x] Deploy das correções da Fase 0 no VPS de produção — concluído 2026-07-17
 - [x] HTTPS no backend de produção — concluído 2026-07-17 (achado #14)
@@ -148,6 +154,12 @@ Vem de `PLANEJAMENTO.md` e `PLANEJAMENTO_AMIGOFIT.md`. Só volte aqui quando fec
 - Web app para visualização de dados
 
 Prioridade recomendada quando chegar a hora: Integração Health/Fit > Relatório semanal automático > Planos de treino por IA > Push notifications > Monetização.
+
+**Novas ideias (2026-09-07)** — "conversar ao máximo" virou Fase 5 (ver seção 3); o resto fica aqui como referência futura:
+- Retenção com baixo esforço de digitação: check-in por notificação com quick-reply direto da tela de bloqueio; atalhos/templates rápidos ("dormi bem", "treino de perna feito"); widget de tela inicial (iOS) com streak/resumo do dia
+- Saúde/segurança: alerta de dor recorrente detectada nas extrações (sugerir cautela/procurar profissional); PIN/Face ID para abrir o app (dados de saúde sensíveis)
+- Visual/progresso: fotos de progresso corporal com timeline comparável lado a lado
+- Apple Watch: registrar treino ativo ou responder humor/dor direto do pulso
 
 ---
 

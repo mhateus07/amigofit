@@ -1,4 +1,5 @@
 import { AIService } from '../ai';
+import * as storage from '../storage';
 
 describe('AIService.extractData', () => {
   const originalFetch = global.fetch;
@@ -82,5 +83,56 @@ describe('AIService.generateInsights', () => {
     const service = new AIService();
 
     await expect(service.generateInsights([], null)).rejects.toThrow('API key ausente');
+  });
+});
+
+describe('AIService.transcribeAudio', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('lança erro quando nenhum provedor com chave suporta transcrição', async () => {
+    jest.spyOn(storage, 'authHeadersForTranscription').mockResolvedValue(null);
+
+    const service = new AIService();
+
+    await expect(service.transcribeAudio('base64audio', 'audio/m4a')).rejects.toThrow(
+      'Nenhuma chave de IA compatível com transcrição encontrada'
+    );
+  });
+
+  it('retorna o texto transcrito quando a chamada é bem-sucedida', async () => {
+    jest.spyOn(storage, 'authHeadersForTranscription').mockResolvedValue({
+      'x-provider': 'groq',
+      'x-api-key': 'fake-key',
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ text: 'dormi bem essa noite' }),
+    }) as unknown as typeof fetch;
+
+    const service = new AIService();
+    const result = await service.transcribeAudio('base64audio', 'audio/m4a');
+
+    expect(result).toBe('dormi bem essa noite');
+  });
+
+  it('lança erro com a mensagem do servidor quando a transcrição falha', async () => {
+    jest.spyOn(storage, 'authHeadersForTranscription').mockResolvedValue({
+      'x-provider': 'groq',
+      'x-api-key': 'fake-key',
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'Provedor indisponível' }),
+    }) as unknown as typeof fetch;
+
+    const service = new AIService();
+
+    await expect(service.transcribeAudio('base64audio', 'audio/m4a')).rejects.toThrow('Provedor indisponível');
   });
 });
