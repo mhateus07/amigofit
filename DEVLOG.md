@@ -196,6 +196,19 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
 
 ---
 
+## Fase 6: Fichas de treino com vídeo por exercício — 2026-09-08
+
+- Nova aba "Treino" na barra inferior. Arquitetura clona a da aba Dieta (ficha = meal, exercício = item, check-in de treino = meal checkin), com uma peça nova: upload de vídeo próprio do usuário por exercício (não é biblioteca externa nem link de YouTube).
+- Modelo de dados: tabelas `workout_plans`, `workout_checkins`, `exercise_videos`.
+- Backend: CRUD de ficha + check-in (`/api/workout-plans`, `/api/workout-plans/checkins`) — check-in "concluí hoje" grava em `extracted_data` (category `workout`), alimentando a conquista `workouts-10` já existente sem mudar `achievements.ts`.
+- Backend: extração de ficha via PDF (`/api/extract-workout`) e via foto (visão multi-provedor: Anthropic, OpenAI, Gemini; Groq/gpt-oss não tem visão e retorna erro claro pedindo pra trocar de provedor ou usar PDF).
+- Infra: volume Docker novo pro `backend` (antes não tinha nenhum — arquivo escrito no container sumia a cada deploy), `multer`, endpoints `POST/GET/DELETE /api/exercise-videos`.
+- Frontend: `TreinoScreen.tsx`, `useWorkoutPlan.ts` — form manual + lista + check-in + anexar/gravar vídeo por exercício (`expo-video`) + player inline + botão "📷 Foto" reaproveitando o `WorkoutReviewModal`.
+- Novo pod nativo (`expo-video`) e `NSCameraUsageDescription` no `app.json` — mesma pegadinha do `aps-environment` reaparecendo após `expo prebuild` (removido manualmente de novo).
+- 33 testes novos no backend (`workoutplan`, `extractworkout`, `exercisevideos`). Validado de ponta a ponta no iPhone físico do usuário: aba Treino, gravação/anexo de vídeo e extração via PDF/foto funcionando.
+
+---
+
 ## Próximos passos sugeridos
 
 - [ ] Substituir `assets/icon.png` e `assets/adaptive-icon.png` pelo ícone gerado no Lovart
