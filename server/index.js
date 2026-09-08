@@ -6,6 +6,10 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PDFParse } = require('pdf-parse');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,6 +27,24 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'amigofit',
   user: process.env.DB_USER || 'amigofit',
   password: process.env.DB_PASSWORD || 'amigofit',
+});
+
+// ── Upload de vídeo (exercícios) ───────────────────────────
+// Precisa de volume Docker persistente montado em UPLOAD_DIR (ver
+// docker-compose.yml) — sem isso, os arquivos somem a cada deploy.
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../uploads/exercise-videos');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const videoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+    filename: (req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname || '')}`),
+  }),
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('video/')) return cb(new Error('Arquivo precisa ser um vídeo'));
+    cb(null, true);
+  },
 });
 
 async function initDB() {
@@ -525,6 +547,84 @@ Regras:
   return JSON.parse(responseText).meals || [];
 }
 
+async function extractWorkoutWithProvider(config, text) {
+  const { provider, apiKey } = config;
+  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
+
+  const PROMPT = `Analise o texto extraído de uma ficha de treino em PDF e retorne APENAS JSON válido (sem markdown):
+
+{"plans":[{"name":"...","dayLabel":"...","exercises":[{"name":"...","sets":N,"reps":"...","load":"...","restSeconds":N,"notes":"..."}]}]}
+
+Regras:
+- "name" do plano é o nome do treino (ex: "Treino A - Peito/Tríceps"). Se a ficha tiver vários treinos (A, B, C...), cada um vira um item de "plans".
+- "dayLabel" é o dia da semana ou letra do treino, se identificável (ex: "Segunda", "Treino A"). Pode ficar null se não houver.
+- "sets" é número de séries. "reps" e "load" são texto livre (ex: "8-12", "até a falha", "20kg", "peso corporal"). "restSeconds" é o descanso em segundos, se informado. Qualquer campo não identificável fica null/omitido.
+- Se não houver exercícios identificáveis: {"plans":[]}`;
+
+  const userContent = `${PROMPT}\n\nTexto do PDF:\n"""${text}"""`;
+  let responseText;
+
+  if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: userContent }],
+    });
+    responseText = response.content[0].text;
+  } else if (provider === 'openai' || provider === 'groq') {
+    const baseUrl = provider === 'groq'
+      ? 'https://api.groq.com/openai/v1'
+      : 'https://api.openai.com/v1';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_tokens: provider === 'groq' ? 3072 : 2048,
+        messages: [{ role: 'user', content: userContent }],
+        response_format: { type: 'json_object' },
+        ...groqReasoningOptions(provider),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    responseText = data.choices[0]?.message?.content || '{"plans":[]}';
+  } else if (provider === 'gemini') {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: userContent }] }],
+          generationConfig: { responseMimeType: 'application/json' },
+        }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    responseText = data.candidates[0]?.content?.parts[0]?.text || '{"plans":[]}';
+  } else {
+    return [];
+  }
+
+  responseText = responseText.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+  const parsed = JSON.parse(responseText).plans || [];
+  return parsed.map((p) => ({
+    name: p.name || 'Treino',
+    dayLabel: p.dayLabel || null,
+    exercises: Array.isArray(p.exercises) ? p.exercises.map((e) => ({
+      name: e.name || '',
+      sets: typeof e.sets === 'number' ? e.sets : undefined,
+      reps: e.reps || undefined,
+      load: e.load || undefined,
+      restSeconds: typeof e.restSeconds === 'number' ? e.restSeconds : undefined,
+      notes: e.notes || undefined,
+    })).filter((e) => e.name) : [],
+  }));
+}
+
 const TRANSCRIPTION_MODELS = {
   openai: 'whisper-1',
   groq: 'whisper-large-v3-turbo',
@@ -824,6 +924,139 @@ app.post('/api/meal-plan/checkins', requireAuth, async (req, res) => {
   }
 });
 
+// ── Workout Plans (fichas de treino) ───────────────────────
+app.get('/api/workout-plans', requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT id, name, day_label as "dayLabel", exercises, source FROM workout_plans WHERE user_id=$1 AND active=true ORDER BY sort_order ASC',
+    [req.userId]
+  );
+  res.json({ plans: rows });
+});
+
+app.post('/api/workout-plans', requireAuth, async (req, res) => {
+  const { plans } = req.body;
+  if (!Array.isArray(plans)) return res.status(400).json({ error: 'plans must be array' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM workout_plans WHERE user_id=$1', [req.userId]);
+    for (const [i, p] of plans.entries()) {
+      const id = p.id || ('wp_' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+      await client.query(
+        'INSERT INTO workout_plans (id, user_id, name, day_label, exercises, source, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [id, req.userId, p.name, p.dayLabel || null, JSON.stringify(p.exercises || []), p.source || 'manual', i]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('Save workout plans error:', e.message);
+    res.status(500).json({ error: 'Erro ao salvar fichas de treino' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/workout-plans/checkins', requireAuth, async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: 'date é obrigatório' });
+  const { rows } = await pool.query(
+    'SELECT workout_plan_id as "workoutPlanId", date, status, checked_at as "checkedAt" FROM workout_checkins WHERE user_id=$1 AND date=$2',
+    [req.userId, date]
+  );
+  res.json({ checkins: rows.map(r => ({ ...r, checkedAt: r.checkedAt ? Number(r.checkedAt) : null })) });
+});
+
+app.post('/api/workout-plans/checkins', requireAuth, async (req, res) => {
+  const { workoutPlanId, date, status } = req.body;
+  if (!workoutPlanId || !date || !status) return res.status(400).json({ error: 'workoutPlanId, date e status são obrigatórios' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const checkedAt = Date.now();
+    await client.query(
+      `INSERT INTO workout_checkins (user_id, workout_plan_id, date, status, checked_at) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (workout_plan_id, date) DO UPDATE SET status=$4, checked_at=$5`,
+      [req.userId, workoutPlanId, date, status, checkedAt]
+    );
+
+    // "Concluí o treino" também vira um dado extraído (category: workout), visível no
+    // Diário/Insights e que já alimenta a conquista "10 treinos" existente. Mesmo
+    // truque de source_ref do check-in de refeição, pra não duplicar/deixar lixo se
+    // o usuário alternar o status várias vezes.
+    const sourceRef = `workout_checkin:${workoutPlanId}:${date}`;
+    await client.query('DELETE FROM extracted_data WHERE user_id=$1 AND source_ref=$2', [req.userId, sourceRef]);
+    if (status === 'done') {
+      const { rows } = await client.query(
+        'SELECT name, exercises FROM workout_plans WHERE id=$1 AND user_id=$2',
+        [workoutPlanId, req.userId]
+      );
+      const plan = rows[0];
+      if (plan) {
+        const exerciseNames = Array.isArray(plan.exercises) ? plan.exercises.map(e => e.name).filter(Boolean) : [];
+        const value = exerciseNames.length ? exerciseNames.join(', ') : 'Treino registrado';
+        await client.query(
+          `INSERT INTO extracted_data (user_id, category, label, value, raw_text, timestamp, source_ref)
+           VALUES ($1,'workout',$2,$3,$4,$5,$6)`,
+          [req.userId, plan.name, value, 'Marcado como concluído na ficha de treino', checkedAt, sourceRef]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('Workout checkin error:', e.message);
+    res.status(500).json({ error: 'Erro ao registrar check-in de treino' });
+  } finally {
+    client.release();
+  }
+});
+
+// ── Exercise videos ─────────────────────────────────────────
+app.post('/api/exercise-videos', requireAuth, (req, res) => {
+  videoUpload.single('video')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'Arquivo de vídeo é obrigatório' });
+    try {
+      const id = crypto.randomUUID();
+      await pool.query(
+        'INSERT INTO exercise_videos (id, user_id, filename, mime_type, size_bytes) VALUES ($1,$2,$3,$4,$5)',
+        [id, req.userId, req.file.filename, req.file.mimetype, req.file.size]
+      );
+      res.json({ id });
+    } catch (e) {
+      fs.unlink(path.join(UPLOAD_DIR, req.file.filename), () => {});
+      console.error('Save exercise video error:', e.message);
+      res.status(500).json({ error: 'Erro ao salvar vídeo' });
+    }
+  });
+});
+
+app.get('/api/exercise-videos/:id/file', requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT filename, mime_type FROM exercise_videos WHERE id=$1 AND user_id=$2',
+    [req.params.id, req.userId]
+  );
+  if (!rows.length) return res.status(404).end();
+  res.sendFile(path.join(UPLOAD_DIR, rows[0].filename), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
+
+app.delete('/api/exercise-videos/:id', requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT filename FROM exercise_videos WHERE id=$1 AND user_id=$2',
+    [req.params.id, req.userId]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Vídeo não encontrado' });
+  await pool.query('DELETE FROM exercise_videos WHERE id=$1 AND user_id=$2', [req.params.id, req.userId]);
+  fs.unlink(path.join(UPLOAD_DIR, rows[0].filename), () => {});
+  res.json({ ok: true });
+});
+
 // ── AI: Chat ──────────────────────────────────────────────
 app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
   const config = getProviderConfig(req, res);
@@ -896,6 +1129,38 @@ app.post('/api/extract-meals', requireAuth, aiLimiter, async (req, res) => {
   } catch (e) {
     console.error('Extract meals error:', e.message);
     res.json({ meals: [], error: e.message });
+  }
+});
+
+// ── AI: Extract Workout from PDF ──────────────────────────
+app.post('/api/extract-workout', requireAuth, aiLimiter, async (req, res) => {
+  const config = getProviderConfig(req, res);
+  if (!config) return;
+  const { pdfBase64 } = req.body;
+  if (!pdfBase64) return res.status(400).json({ error: 'pdfBase64 é obrigatório' });
+
+  let text;
+  try {
+    const buffer = Buffer.from(pdfBase64, 'base64');
+    const parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    await parser.destroy();
+    text = result.text || '';
+  } catch (e) {
+    console.error('PDF parse error:', e.message);
+    return res.json({ plans: [], error: 'Não conseguimos ler esse arquivo. Confira se é um PDF válido.' });
+  }
+
+  if (text.trim().length < 30) {
+    return res.json({ plans: [], error: 'Não conseguimos extrair texto deste PDF (pode ser uma imagem escaneada). Tente montar a ficha manualmente.' });
+  }
+
+  try {
+    const plans = await extractWorkoutWithProvider(config, text);
+    res.json({ plans });
+  } catch (e) {
+    console.error('Extract workout error:', e.message);
+    res.json({ plans: [], error: e.message });
   }
 });
 

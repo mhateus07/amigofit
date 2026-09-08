@@ -49,6 +49,7 @@
     "metro-source-map": "^0.82.0",
     "metro-transform-plugins": "^0.82.0",
     "metro-transform-worker": "^0.82.0",
+    "multer": "^2.3.0",
     "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "react": "19.1.0",

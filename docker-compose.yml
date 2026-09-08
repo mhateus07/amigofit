@@ -28,6 +28,9 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8081,http://localhost:19006}
       PORT: 3001
+      UPLOAD_DIR: /app/uploads/exercise-videos
+    volumes:
+      - uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -50,3 +53,4 @@ networks:
 
 volumes:
   pgdata:
+  uploads:
