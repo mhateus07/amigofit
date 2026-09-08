@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import { Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin, AiInsight } from '../types';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin, AiInsight, WorkoutPlan, WorkoutCheckin } from '../types';
 
 export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://amigofit-api.impulsiodigital.com';
 
@@ -219,6 +220,83 @@ async function extractMealsFromPdf(pdfBase64: string): Promise<{ meals: Omit<Mea
   }
 }
 
+// ── Workout Plans (fichas de treino) ───────────────────────
+async function getWorkoutPlans(): Promise<WorkoutPlan[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/workout-plans`, { headers: await authHeaders() });
+    const data = await res.json();
+    return data.plans || [];
+  } catch { return []; }
+}
+async function saveWorkoutPlans(plans: WorkoutPlan[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/workout-plans`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ plans }),
+    });
+  } catch { /* silent */ }
+}
+async function getWorkoutCheckins(date: string): Promise<WorkoutCheckin[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/workout-plans/checkins?date=${date}`, { headers: await authHeaders() });
+    const data = await res.json();
+    return data.checkins || [];
+  } catch { return []; }
+}
+async function checkInWorkout(workoutPlanId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/workout-plans/checkins`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ workoutPlanId, date, status }),
+    });
+  } catch { /* silent */ }
+}
+async function extractWorkoutFromPdf(pdfBase64: string): Promise<{ plans: Omit<WorkoutPlan, 'id'>[]; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/extract-workout`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ pdfBase64 }),
+    });
+    const data = await res.json();
+    return { plans: data.plans || [], error: data.error };
+  } catch {
+    return { plans: [], error: 'Falha de conexão ao enviar o PDF. Tente novamente.' };
+  }
+}
+
+// ── Exercise videos ──────────────────────────────────────────
+async function uploadExerciseVideo(fileUri: string, mimeType: string): Promise<{ id?: string; error?: string }> {
+  try {
+    const token = await getToken();
+    const res = await FileSystem.uploadAsync(`${API_BASE}/api/exercise-videos`, fileUri, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName: 'video',
+      mimeType,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    const data = JSON.parse(res.body || '{}');
+    if (res.status < 200 || res.status >= 300) return { error: data.error || `HTTP ${res.status}` };
+    return { id: data.id };
+  } catch {
+    return { error: 'Falha de conexão ao enviar o vídeo. Tente novamente.' };
+  }
+}
+async function deleteExerciseVideo(id: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/exercise-videos/${id}`, {
+      method: 'DELETE',
+      headers: await authHeaders(),
+    });
+  } catch { /* silent */ }
+}
+export function exerciseVideoUrl(id: string): string {
+  return `${API_BASE}/api/exercise-videos/${id}/file`;
+}
+
 // ── API Key (per-provider) ────────────────────────────────
 async function getApiKey(provider?: AIProvider): Promise<string | null> {
   const p = provider ?? await getProvider();
@@ -264,6 +342,8 @@ export const storage = {
   getProfile, saveProfile,
   getExtractedData, addExtractedData,
   getMealPlan, saveMealPlan, getCheckins, checkInMeal, extractMealsFromPdf,
+  getWorkoutPlans, saveWorkoutPlans, getWorkoutCheckins, checkInWorkout, extractWorkoutFromPdf,
+  uploadExerciseVideo, deleteExerciseVideo, exerciseVideoUrl,
   getApiKey, saveApiKey, hasAnyApiKey,
   getProvider, saveProvider,
   getCachedInsights, saveCachedInsights,

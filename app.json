@@ -50,7 +50,8 @@
         {
           "microphonePermission": "Permite gravar sua voz para transcrever e registrar no chat, sem precisar digitar."
         }
-      ]
+      ],
+      "expo-video"
     ],
     "splash": {
       "image": "./assets/splash-bg.png",
@@ -60,7 +61,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Permite enviar fotos e prints para o AmigoFit analisar."
+        "NSPhotoLibraryUsageDescription": "Permite enviar fotos e prints para o AmigoFit analisar.",
+        "NSCameraUsageDescription": "Permite gravar vídeos de execução dos exercícios para anexar nas fichas de treino."
       },
       "bundleIdentifier": "com.mhateus07.amigofit"
     },
