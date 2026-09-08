@@ -126,6 +126,16 @@ Ideias levantadas em 2026-09-07 (ver seção 4 para as demais). Objetivo: refor�
 - [x] Entrada por voz/áudio no chat: gravar e transcrever (Whisper ou equivalente) para registrar logo após o treino sem digitar — **implementado e confirmado em 2026-09-08**. `src/hooks/useVoiceRecorder.ts` (`expo-audio`, preset HIGH_QUALITY, auto-stop em 2min), botão 🎤 no `ChatScreen.tsx` grava e transcreve, preenchendo o campo de texto pra revisão antes de enviar (não envia direto). Backend: `POST /api/transcribe` — Groq/OpenAI via Whisper (multipart), Gemini via áudio inline no `generateContent`; Anthropic não suporta, então `storage.ts` escolhe automaticamente outro provedor com chave salva (ordem: ativo se compatível > Groq > OpenAI > Gemini) sem depender do provedor ativo do chat. Testado no iPhone físico do usuário via Xcode (precisou `pod install` manual — `expo prebuild` não rodou sozinho — e remover `aps-environment` do entitlements de novo, mesma pegadinha de sempre). Achado no caminho: modelo Groq `llama-3.3-70b-versatile` estava descontinuado, quebrando o chat com Groq ativo — ver risco #18.
 - [ ] Foto da refeição no chat: enviar imagem e a IA (vision) descrever/estimar a refeição, mesmo padrão de "não preencher formulário"
 
+### ⬜ Fase 6 — Fichas de treino com vídeo por exercício
+Planejado em 2026-09-08 (plano completo em `.claude/plans/fancy-gathering-eich.md`). Nova aba "Treino" na barra inferior. Arquitetura clona a da aba Dieta (ficha = meal, exercício = item, check-in de treino = meal checkin), com uma peça nova: upload de vídeo próprio do usuário por exercício (não é biblioteca externa nem link de YouTube).
+- [ ] Modelo de dados + tabelas (`workout_plans`, `workout_checkins`, `exercise_videos`) + tipos TS (`Exercise`, `WorkoutPlan`, `WorkoutCheckin`)
+- [ ] Backend: CRUD de ficha + check-in (`/api/workout-plans`, `/api/workout-plans/checkins`), sem IA/vídeo ainda — inclui insert em `extracted_data` (category `workout`) no check-in "concluí hoje", que já alimenta a conquista `workouts-10` existente sem mudar `achievements.ts`
+- [ ] Frontend: aba Treino básica (form manual + lista + check-in) — MVP navegável ponta a ponta, testável no device
+- [ ] Backend + frontend: extração de ficha via PDF (`/api/extract-workout`, mesmo padrão do `/api/extract-meals`) + tela de revisão antes de salvar
+- [ ] Infra + backend: upload de vídeo — volume Docker novo pro `backend` (hoje não tem nenhum, arquivo escrito no container some a cada deploy), `multer`, endpoints `POST/GET/DELETE /api/exercise-videos`
+- [ ] Frontend: anexar/gravar vídeo por exercício (`expo-image-picker`, mediaTypes vídeo) + player inline (`expo-video`, novo módulo nativo — precisa prebuild/pod install como o `expo-audio`)
+- [ ] (fast-follow, escopo adicional) Extração de ficha via foto — visão multi-provedor (Anthropic e OpenAI e Gemini; Groq/gpt-oss não tem visão, erro claro)
+
 ### ⬜ Fase 4 — Pendências de infraestrutura e produto
 - [x] Deploy das correções da Fase 0 no VPS de produção — concluído 2026-07-17
 - [x] HTTPS no backend de produção — concluído 2026-07-17 (achado #14)
