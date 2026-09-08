@@ -266,6 +266,19 @@ async function extractWorkoutFromPdf(pdfBase64: string): Promise<{ plans: Omit<W
     return { plans: [], error: 'Falha de conexão ao enviar o PDF. Tente novamente.' };
   }
 }
+async function extractWorkoutFromImage(imageBase64: string, mimeType: string): Promise<{ plans: Omit<WorkoutPlan, 'id'>[]; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/extract-workout`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ imageBase64, mimeType }),
+    });
+    const data = await res.json();
+    return { plans: data.plans || [], error: data.error };
+  } catch {
+    return { plans: [], error: 'Falha de conexão ao enviar a foto. Tente novamente.' };
+  }
+}
 
 // ── Exercise videos ──────────────────────────────────────────
 async function uploadExerciseVideo(fileUri: string, mimeType: string): Promise<{ id?: string; error?: string }> {
@@ -342,7 +355,7 @@ export const storage = {
   getProfile, saveProfile,
   getExtractedData, addExtractedData,
   getMealPlan, saveMealPlan, getCheckins, checkInMeal, extractMealsFromPdf,
-  getWorkoutPlans, saveWorkoutPlans, getWorkoutCheckins, checkInWorkout, extractWorkoutFromPdf,
+  getWorkoutPlans, saveWorkoutPlans, getWorkoutCheckins, checkInWorkout, extractWorkoutFromPdf, extractWorkoutFromImage,
   uploadExerciseVideo, deleteExerciseVideo, exerciseVideoUrl,
   getApiKey, saveApiKey, hasAnyApiKey,
   getProvider, saveProvider,

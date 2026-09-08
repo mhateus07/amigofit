@@ -449,6 +449,22 @@ export default function TreinoScreen() {
     ]);
   };
 
+  const applyExtractedDrafts = (extracted: Omit<WorkoutPlan, 'id'>[], error?: string): boolean => {
+    if (error) {
+      Alert.alert('Não foi possível ler o arquivo', error);
+      return false;
+    }
+    if (extracted.length === 0) {
+      Alert.alert('Nenhuma ficha encontrada', 'Não conseguimos identificar exercícios. Tente montar a ficha manualmente.');
+      return false;
+    }
+    setPdfDrafts(extracted.map((d) => ({
+      ...d,
+      exercises: d.exercises.map((e) => ({ ...e, id: e.id || newExerciseId() })),
+    })));
+    return true;
+  };
+
   const handleUploadPdf = async () => {
     const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf' });
     if (result.canceled || !result.assets?.[0]) return;
@@ -459,20 +475,30 @@ export default function TreinoScreen() {
         encoding: FileSystem.EncodingType.Base64,
       });
       const { plans: extracted, error } = await storage.extractWorkoutFromPdf(base64);
-      if (error) {
-        Alert.alert('Não foi possível ler o PDF', error);
-        return;
-      }
-      if (extracted.length === 0) {
-        Alert.alert('Nenhuma ficha encontrada', 'Não conseguimos identificar exercícios nesse PDF. Tente montar a ficha manualmente.');
-        return;
-      }
-      setPdfDrafts(extracted.map((d) => ({
-        ...d,
-        exercises: d.exercises.map((e) => ({ ...e, id: e.id || newExerciseId() })),
-      })));
+      applyExtractedDrafts(extracted, error);
     } catch {
       Alert.alert('Erro', 'Não foi possível processar o arquivo. Tente novamente.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleUploadPhoto = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permissão necessária', 'Precisamos acessar sua galeria para enviar a foto da ficha.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.7 });
+    if (result.canceled || !result.assets?.[0]?.base64) return;
+
+    setImporting(true);
+    try {
+      const asset = result.assets[0];
+      const { plans: extracted, error } = await storage.extractWorkoutFromImage(asset.base64!, asset.mimeType || 'image/jpeg');
+      applyExtractedDrafts(extracted, error);
+    } catch {
+      Alert.alert('Erro', 'Não foi possível processar a foto. Tente novamente.');
     } finally {
       setImporting(false);
     }
@@ -502,13 +528,14 @@ export default function TreinoScreen() {
             {plans.length === 0 ? 'Nenhuma ficha cadastrada' : `${doneCount} de ${plans.length} fichas hoje`}
           </Text>
         </View>
-        <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPdf} disabled={importing}>
-          {importing ? (
-            <ActivityIndicator size="small" color={colors.primary} />
-          ) : (
-            <Text style={styles.pdfBtnText}>📄 PDF</Text>
-          )}
-        </TouchableOpacity>
+        <View style={styles.headerBtns}>
+          <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPdf} disabled={importing}>
+            {importing ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.pdfBtnText}>📄 PDF</Text>}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPhoto} disabled={importing}>
+            <Text style={styles.pdfBtnText}>📷 Foto</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
@@ -570,6 +597,7 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.textSecondary, fontSize: fontSize.sm },
   list: { padding: spacing.md, paddingBottom: 100 },
 
+  headerBtns: { flexDirection: 'row', gap: spacing.xs },
   pdfBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.full, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, minWidth: 40, minHeight: 32, justifyContent: 'center' },
   pdfBtnText: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
 

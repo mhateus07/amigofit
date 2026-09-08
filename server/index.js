@@ -547,11 +547,7 @@ Regras:
   return JSON.parse(responseText).meals || [];
 }
 
-async function extractWorkoutWithProvider(config, text) {
-  const { provider, apiKey } = config;
-  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
-
-  const PROMPT = `Analise o texto extraído de uma ficha de treino em PDF e retorne APENAS JSON válido (sem markdown):
+const WORKOUT_EXTRACTION_PROMPT = `Analise {SOURCE} de uma ficha de treino e retorne APENAS JSON válido (sem markdown):
 
 {"plans":[{"name":"...","dayLabel":"...","exercises":[{"name":"...","sets":N,"reps":"...","load":"...","restSeconds":N,"notes":"..."}]}]}
 
@@ -561,7 +557,29 @@ Regras:
 - "sets" é número de séries. "reps" e "load" são texto livre (ex: "8-12", "até a falha", "20kg", "peso corporal"). "restSeconds" é o descanso em segundos, se informado. Qualquer campo não identificável fica null/omitido.
 - Se não houver exercícios identificáveis: {"plans":[]}`;
 
-  const userContent = `${PROMPT}\n\nTexto do PDF:\n"""${text}"""`;
+function parseWorkoutPlansJson(responseText) {
+  const cleaned = (responseText || '{"plans":[]}').trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+  const parsed = JSON.parse(cleaned).plans || [];
+  return parsed.map((p) => ({
+    name: p.name || 'Treino',
+    dayLabel: p.dayLabel || null,
+    exercises: Array.isArray(p.exercises) ? p.exercises.map((e) => ({
+      name: e.name || '',
+      sets: typeof e.sets === 'number' ? e.sets : undefined,
+      reps: e.reps || undefined,
+      load: e.load || undefined,
+      restSeconds: typeof e.restSeconds === 'number' ? e.restSeconds : undefined,
+      notes: e.notes || undefined,
+    })).filter((e) => e.name) : [],
+  }));
+}
+
+async function extractWorkoutWithProvider(config, text) {
+  const { provider, apiKey } = config;
+  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
+
+  const prompt = WORKOUT_EXTRACTION_PROMPT.replace('{SOURCE}', 'o texto extraído de um PDF');
+  const userContent = `${prompt}\n\nTexto do PDF:\n"""${text}"""`;
   let responseText;
 
   if (provider === 'anthropic') {
@@ -609,20 +627,80 @@ Regras:
     return [];
   }
 
-  responseText = responseText.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
-  const parsed = JSON.parse(responseText).plans || [];
-  return parsed.map((p) => ({
-    name: p.name || 'Treino',
-    dayLabel: p.dayLabel || null,
-    exercises: Array.isArray(p.exercises) ? p.exercises.map((e) => ({
-      name: e.name || '',
-      sets: typeof e.sets === 'number' ? e.sets : undefined,
-      reps: e.reps || undefined,
-      load: e.load || undefined,
-      restSeconds: typeof e.restSeconds === 'number' ? e.restSeconds : undefined,
-      notes: e.notes || undefined,
-    })).filter((e) => e.name) : [],
-  }));
+  return parseWorkoutPlansJson(responseText);
+}
+
+// Extração a partir de foto da ficha (não PDF). Groq (gpt-oss) não tem
+// visão, então esse provedor fica de fora com um erro claro pedindo pra
+// trocar de provedor ou usar PDF em vez de foto.
+async function extractWorkoutFromImageWithProvider(config, imageBase64, mimeType) {
+  const { provider, apiKey } = config;
+  const model = PROVIDER_MODELS[provider] || PROVIDER_MODELS.anthropic;
+  const prompt = WORKOUT_EXTRACTION_PROMPT.replace('{SOURCE}', 'a foto a seguir');
+  let responseText;
+
+  if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 2048,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
+          { type: 'text', text: prompt },
+        ],
+      }],
+    });
+    responseText = response.content[0].text;
+  } else if (provider === 'openai') {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_tokens: 2048,
+        response_format: { type: 'json_object' },
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+          ],
+        }],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    responseText = data.choices[0]?.message?.content || '{"plans":[]}';
+  } else if (provider === 'gemini') {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mimeType, data: imageBase64 } },
+            ],
+          }],
+          generationConfig: { responseMimeType: 'application/json' },
+        }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+    responseText = data.candidates[0]?.content?.parts[0]?.text || '{"plans":[]}';
+  } else if (provider === 'groq') {
+    throw new Error('O provedor Groq não suporta análise de imagem. Troque para Anthropic, OpenAI ou Gemini em Perfil → Configuração da IA, ou envie um PDF.');
+  } else {
+    throw new Error(`Provedor desconhecido: ${provider}`);
+  }
+
+  return parseWorkoutPlansJson(responseText);
 }
 
 const TRANSCRIPTION_MODELS = {
@@ -1136,8 +1214,18 @@ app.post('/api/extract-meals', requireAuth, aiLimiter, async (req, res) => {
 app.post('/api/extract-workout', requireAuth, aiLimiter, async (req, res) => {
   const config = getProviderConfig(req, res);
   if (!config) return;
-  const { pdfBase64 } = req.body;
-  if (!pdfBase64) return res.status(400).json({ error: 'pdfBase64 é obrigatório' });
+  const { pdfBase64, imageBase64, mimeType } = req.body;
+  if (!pdfBase64 && !imageBase64) return res.status(400).json({ error: 'pdfBase64 ou imageBase64 é obrigatório' });
+
+  if (imageBase64) {
+    try {
+      const plans = await extractWorkoutFromImageWithProvider(config, imageBase64, mimeType || 'image/jpeg');
+      return res.json({ plans });
+    } catch (e) {
+      console.error('Extract workout (image) error:', e.message);
+      return res.json({ plans: [], error: e.message });
+    }
+  }
 
   let text;
   try {
@@ -1152,7 +1240,7 @@ app.post('/api/extract-workout', requireAuth, aiLimiter, async (req, res) => {
   }
 
   if (text.trim().length < 30) {
-    return res.json({ plans: [], error: 'Não conseguimos extrair texto deste PDF (pode ser uma imagem escaneada). Tente montar a ficha manualmente.' });
+    return res.json({ plans: [], error: 'Não conseguimos extrair texto deste PDF (pode ser uma imagem escaneada). Tente enviar como foto, ou montar a ficha manualmente.' });
   }
 
   try {
