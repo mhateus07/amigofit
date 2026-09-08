@@ -78,7 +78,8 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 15 | Deploy manual multi-passo via SSH, sem script | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/deploy.sh` |
 | 16 | Sem backup do banco de produção | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/backup-db.sh` via cron diário, retenção de 14 dias |
 | 17 | Token JWT e chaves de API de IA em `AsyncStorage` (texto puro, sem criptografia) | `src/services/storage.ts` | ✅ Corrigido em 2026-09-07 — migrado para `expo-secure-store` (Keychain), migração automática dos valores já salvos |
-| 18 | Modelo `llama-3.3-70b-versatile` da Groq foi descontinuado ("does not exist or you do not have access to it") — chat quebrado para qualquer usuário com Groq ativo | `server/index.js` (`PROVIDER_MODELS`) | ✅ Corrigido em 2026-09-08 — trocado para `openai/gpt-oss-120b`, achado ao validar a Fase 5 (voz) com uma conta Groq nova |
+| 18 | Modelo `llama-3.3-70b-versatile` da Groq foi descontinuado ("does not exist or you do not have access to it") — chat quebrado para qualquer usuário com Groq ativo | `server/index.js` (`PROVIDER_MODELS`) | ✅ Corrigido em 2026-09-08 — trocado para `openai/gpt-oss-120b`, depois trocado de novo (ver risco #19) |
+| 19 | `openai/gpt-oss-120b` (modelo de raciocínio) quebra o modo `response_format: json_object` da Groq — `/api/extract` e `/api/insights` falhavam com "Failed to validate JSON", dados do chat não caíam no Diário sem erro visível pro usuário | `server/index.js` (`PROVIDER_MODELS`) | ✅ Corrigido em 2026-09-08 — trocado para `llama-3.1-8b-instant` (modelo simples, sem CoT, confiável em modo JSON estrito), achado ao validar a Fase 5 (voz) — usuário reportou dado de sono não salvo no Diário |
 
 ---
 

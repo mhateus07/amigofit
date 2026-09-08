@@ -152,7 +152,7 @@ const PROVIDER_MODELS = {
   anthropic: 'claude-sonnet-4-6',
   openai: 'gpt-4o',
   gemini: 'gemini-1.5-flash',
-  groq: 'openai/gpt-oss-120b',
+  groq: 'llama-3.1-8b-instant',
 };
 
 function getProviderConfig(req, res) {
