@@ -78,6 +78,7 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 15 | Deploy manual multi-passo via SSH, sem script | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/deploy.sh` |
 | 16 | Sem backup do banco de produção | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/backup-db.sh` via cron diário, retenção de 14 dias |
 | 17 | Token JWT e chaves de API de IA em `AsyncStorage` (texto puro, sem criptografia) | `src/services/storage.ts` | ✅ Corrigido em 2026-09-07 — migrado para `expo-secure-store` (Keychain), migração automática dos valores já salvos |
+| 18 | Modelo `llama-3.3-70b-versatile` da Groq foi descontinuado ("does not exist or you do not have access to it") — chat quebrado para qualquer usuário com Groq ativo | `server/index.js` (`PROVIDER_MODELS`) | ✅ Corrigido em 2026-09-08 — trocado para `openai/gpt-oss-120b`, achado ao validar a Fase 5 (voz) com uma conta Groq nova |
 
 ---
 
@@ -120,7 +121,7 @@ Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos 
 ### ⬜ Fase 5 — Aproveitando o "conversar" ao máximo
 Ideias levantadas em 2026-09-07 (ver seção 4 para as demais). Objetivo: reforçar o diferencial central do app (você não preenche formulário, você conversa) com formas mais ricas de conversar.
 - [ ] Consulta em linguagem natural sobre os próprios dados: perguntar "quantas vezes treinei perna esse mês?" ou "qual foi meu pior dia de sono?" e a IA responder consultando `extracted_data`/`workouts` direto (texto→SQL ou busca estruturada), em vez de só extrair dados novos
-- [ ] Entrada por voz/áudio no chat: gravar e transcrever (Whisper ou equivalente) para registrar logo após o treino sem digitar
+- [x] Entrada por voz/áudio no chat: gravar e transcrever (Whisper ou equivalente) para registrar logo após o treino sem digitar — **implementado e confirmado em 2026-09-08**. `src/hooks/useVoiceRecorder.ts` (`expo-audio`, preset HIGH_QUALITY, auto-stop em 2min), botão 🎤 no `ChatScreen.tsx` grava e transcreve, preenchendo o campo de texto pra revisão antes de enviar (não envia direto). Backend: `POST /api/transcribe` — Groq/OpenAI via Whisper (multipart), Gemini via áudio inline no `generateContent`; Anthropic não suporta, então `storage.ts` escolhe automaticamente outro provedor com chave salva (ordem: ativo se compatível > Groq > OpenAI > Gemini) sem depender do provedor ativo do chat. Testado no iPhone físico do usuário via Xcode (precisou `pod install` manual — `expo prebuild` não rodou sozinho — e remover `aps-environment` do entitlements de novo, mesma pegadinha de sempre). Achado no caminho: modelo Groq `llama-3.3-70b-versatile` estava descontinuado, quebrando o chat com Groq ativo — ver risco #18.
 - [ ] Foto da refeição no chat: enviar imagem e a IA (vision) descrever/estimar a refeição, mesmo padrão de "não preencher formulário"
 
 ### ⬜ Fase 4 — Pendências de infraestrutura e produto
