@@ -64,6 +64,32 @@ export interface MealCheckin {
   checkedAt?: number;
 }
 
+export interface Exercise {
+  id: string;
+  name: string;
+  sets?: number;
+  reps?: string; // texto livre: '8-12', 'até a falha', etc.
+  load?: string; // texto livre: '20kg', 'peso corporal', etc.
+  restSeconds?: number;
+  notes?: string;
+  videoId?: string; // referencia exercise_videos.id
+}
+
+export interface WorkoutPlan {
+  id: string;
+  name: string; // 'Treino A - Peito/Tríceps'
+  dayLabel?: string;
+  exercises: Exercise[];
+  source: 'pdf' | 'photo' | 'manual';
+}
+
+export interface WorkoutCheckin {
+  workoutPlanId: string;
+  date: string; // 'YYYY-MM-DD'
+  status: 'done' | 'skipped';
+  checkedAt?: number;
+}
+
 export type RootStackParamList = {
   Onboarding: undefined;
   Main: undefined;

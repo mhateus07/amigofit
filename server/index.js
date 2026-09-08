@@ -78,6 +78,34 @@ async function initDB() {
       checked_at BIGINT,
       UNIQUE (meal_id, date)
     );
+    CREATE TABLE IF NOT EXISTS workout_plans (
+      id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id),
+      name TEXT NOT NULL,
+      day_label TEXT,
+      exercises JSONB NOT NULL DEFAULT '[]',
+      source TEXT NOT NULL DEFAULT 'manual',
+      active BOOLEAN NOT NULL DEFAULT true,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS workout_checkins (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT REFERENCES users(id),
+      workout_plan_id TEXT REFERENCES workout_plans(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      status TEXT NOT NULL,
+      checked_at BIGINT,
+      UNIQUE (workout_plan_id, date)
+    );
+    CREATE TABLE IF NOT EXISTS exercise_videos (
+      id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id),
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   // Coluna adicionada depois que a tabela já existia em produção -
   // CREATE TABLE IF NOT EXISTS não altera tabelas existentes.
