@@ -152,8 +152,18 @@ const PROVIDER_MODELS = {
   anthropic: 'claude-sonnet-4-6',
   openai: 'gpt-4o',
   gemini: 'gemini-1.5-flash',
-  groq: 'llama-3.1-8b-instant',
+  groq: 'openai/gpt-oss-20b',
 };
+
+// Os modelos Llama da Groq (llama-3.1-8b-instant, llama-3.3-70b-versatile)
+// não estão acessíveis em todas as contas ("does not exist or you do not
+// have access to it"), então usamos os modelos gpt-oss da Groq. Eles são
+// modelos de raciocínio: por padrão gastam parte do orçamento de tokens
+// pensando antes de responder, o que pode truncar o JSON em respostas com
+// response_format: json_object. reasoning_effort: 'low' reduz isso.
+function groqReasoningOptions(provider) {
+  return provider === 'groq' ? { reasoning_effort: 'low' } : {};
+}
 
 function getProviderConfig(req, res) {
   const apiKey = req.headers['x-api-key'];
@@ -219,6 +229,7 @@ async function chatWithProvider(config, messages, systemPrompt) {
         model,
         max_tokens: 1024,
         messages: toOpenAIMessages(messages, systemPrompt),
+        ...groqReasoningOptions(provider),
       }),
     });
     const data = await res.json();
@@ -276,9 +287,10 @@ Se não houver dados relevantes: {"data":[]}`;
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
-        max_tokens: 512,
+        max_tokens: provider === 'groq' ? 1024 : 512,
         messages: [{ role: 'user', content: userContent }],
         response_format: { type: 'json_object' },
+        ...groqReasoningOptions(provider),
       }),
     });
     const data = await res.json();
@@ -378,9 +390,10 @@ async function generateInsightsWithProvider(config, data, profile) {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
-        max_tokens: 1024,
+        max_tokens: provider === 'groq' ? 2048 : 1024,
         messages: [{ role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
+        ...groqReasoningOptions(provider),
       }),
     });
     const data2 = await res.json();
@@ -452,9 +465,10 @@ Regras:
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
-        max_tokens: 2048,
+        max_tokens: provider === 'groq' ? 3072 : 2048,
         messages: [{ role: 'user', content: userContent }],
         response_format: { type: 'json_object' },
+        ...groqReasoningOptions(provider),
       }),
     });
     const data = await res.json();
