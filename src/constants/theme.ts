@@ -1,19 +1,19 @@
 export const colors = {
-  primary: '#00C853',
-  primaryDark: '#009624',
-  primaryLight: '#5EFC82',
-  background: '#0F0F0F',
-  surface: '#1A1A1A',
-  surfaceElevated: '#242424',
-  border: '#2A2A2A',
-  text: '#FFFFFF',
-  textSecondary: '#A0A0A0',
-  textMuted: '#555555',
-  userBubble: '#00C853',
-  aiBubble: '#1E1E1E',
-  error: '#FF4444',
-  warning: '#FFB300',
-  success: '#00C853',
+  primary: '#2E7D4F',
+  primaryDark: '#1F5C39',
+  primaryLight: '#E4F2E9',
+  background: '#F6F6F8',
+  surface: '#FFFFFF',
+  surfaceElevated: '#FFFFFF',
+  border: '#E4E4E8',
+  text: '#1C1C1E',
+  textSecondary: '#6E6E73',
+  textMuted: '#AEAEB2',
+  userBubble: '#2E7D4F',
+  aiBubble: '#F0F0F3',
+  error: '#D92D20',
+  warning: '#B25E00',
+  success: '#2E7D4F',
 };
 
 export const spacing = {
@@ -26,10 +26,10 @@ export const spacing = {
 };
 
 export const radius = {
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 24,
+  sm: 6,
+  md: 10,
+  lg: 14,
+  xl: 20,
   full: 999,
 };
 
@@ -41,4 +41,21 @@ export const fontSize = {
   xl: 20,
   xxl: 24,
   xxxl: 32,
+};
+
+export const fontFamily = {
+  regular: 'Inter_400Regular',
+  medium: 'Inter_500Medium',
+  semiBold: 'Inter_600SemiBold',
+  bold: 'Inter_700Bold',
+};
+
+export const shadow = {
+  card: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
+  },
 };

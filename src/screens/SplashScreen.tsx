@@ -130,8 +130,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     elevation: 20,
   },
-  logoText:  { color: '#000', fontSize: 38, fontWeight: '900', letterSpacing: -1 },
+  logoText:  { color: '#FFFFFF', fontSize: 38, fontWeight: '900', letterSpacing: -1 },
   textBlock: { alignItems: 'center', gap: 6 },
-  title:     { color: colors.text, fontSize: 32, fontWeight: '800', letterSpacing: 0.5 },
+  title:     { color: '#FFFFFF', fontSize: 32, fontWeight: '800', letterSpacing: 0.5 },
   tagline:   { color: 'rgba(255,255,255,0.7)', fontSize: 15 },
 });

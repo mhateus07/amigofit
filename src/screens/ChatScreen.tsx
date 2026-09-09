@@ -21,7 +21,7 @@ import { Message, UserProfile } from '../types';
 import { useChat } from '../hooks/useChat';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { calculateStreak } from '../utils/streak';
-import { colors, spacing, radius, fontSize } from '../constants/theme';
+import { colors, spacing, radius, fontSize, fontFamily, shadow } from '../constants/theme';
 
 interface Props {
   profile: UserProfile | null;
@@ -42,7 +42,7 @@ function AIText({ content }: { content: string }) {
         let m: RegExpExecArray | null;
         while ((m = regex.exec(cleanLine)) !== null) {
           if (m.index > last) parts.push(cleanLine.slice(last, m.index));
-          if (m[1]) parts.push(<Text key={m.index} style={{ fontWeight: '700', color: colors.text }}>{m[1]}</Text>);
+          if (m[1]) parts.push(<Text key={m.index} style={{ fontFamily: fontFamily.semiBold, color: colors.text }}>{m[1]}</Text>);
           else if (m[2]) parts.push(<Text key={m.index} style={{ fontStyle: 'italic' }}>{m[2]}</Text>);
           last = m.index + m[0].length;
         }
@@ -320,6 +320,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
@@ -331,23 +332,23 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     backgroundColor: colors.primary,
   },
-  headerTitle: { color: colors.text, fontSize: fontSize.lg, fontWeight: '700' },
-  headerSubtitle: { color: colors.textSecondary, fontSize: fontSize.xs },
+  headerTitle: { color: colors.text, fontSize: fontSize.lg, fontFamily: fontFamily.semiBold },
+  headerSubtitle: { color: colors.textSecondary, fontSize: fontSize.xs, fontFamily: fontFamily.regular },
   streakBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    backgroundColor: 'rgba(255,100,0,0.15)',
+    backgroundColor: '#FDF0E6',
     borderRadius: radius.full,
     paddingHorizontal: spacing.sm,
     paddingVertical: 3,
     borderWidth: 1,
-    borderColor: 'rgba(255,100,0,0.3)',
+    borderColor: '#F3D9C0',
   },
   streakIcon: { fontSize: 13 },
-  streakText: { color: '#FF6400', fontSize: fontSize.sm, fontWeight: '700' },
+  streakText: { color: '#B25E00', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   clearBtn: { paddingHorizontal: spacing.sm, paddingVertical: 2 },
-  clearBtnText: { color: colors.textMuted, fontSize: fontSize.xs },
+  clearBtnText: { color: colors.textMuted, fontSize: fontSize.xs, fontFamily: fontFamily.regular },
   messageList: { padding: spacing.md, paddingBottom: spacing.xl },
   bubbleRow: { flexDirection: 'row', marginBottom: spacing.md, alignItems: 'flex-end', gap: spacing.sm },
   bubbleRowUser: { justifyContent: 'flex-end' },
@@ -360,27 +361,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarText: { color: '#000', fontSize: fontSize.xs, fontWeight: '800' },
-  bubble: { maxWidth: '78%', borderRadius: radius.lg, padding: spacing.md },
+  avatarText: { color: '#FFFFFF', fontSize: fontSize.xs, fontFamily: fontFamily.bold },
+  bubble: { maxWidth: '78%', borderRadius: radius.lg, padding: spacing.md, ...shadow.card },
   bubbleUser: { backgroundColor: colors.userBubble, borderBottomRightRadius: 4 },
-  bubbleAI: { backgroundColor: colors.aiBubble, borderBottomLeftRadius: 4 },
-  bubbleText: { color: colors.text, fontSize: fontSize.md, lineHeight: 22 },
-  bubbleTextUser: { color: '#000' },
-  aiText:    { color: colors.text, fontSize: fontSize.md, lineHeight: 22 },
-  aiHeading: { fontWeight: '700', fontSize: fontSize.lg, color: colors.primary, marginBottom: 2 },
+  bubbleAI: { backgroundColor: colors.aiBubble, borderBottomLeftRadius: 4, shadowOpacity: 0 },
+  bubbleText: { color: colors.text, fontSize: fontSize.md, lineHeight: 22, fontFamily: fontFamily.regular },
+  bubbleTextUser: { color: '#FFFFFF' },
+  aiText:    { color: colors.text, fontSize: fontSize.md, lineHeight: 22, fontFamily: fontFamily.regular },
+  aiHeading: { fontFamily: fontFamily.semiBold, fontSize: fontSize.lg, color: colors.primary, marginBottom: 2 },
   aiBullet:  { marginLeft: 4 },
   bulletDot: { color: colors.primary },
-  timestamp: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4 },
-  timestampUser: { color: 'rgba(0,0,0,0.4)', textAlign: 'right' },
+  timestamp: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4, fontFamily: fontFamily.regular },
+  timestampUser: { color: 'rgba(255,255,255,0.75)', textAlign: 'right' },
   dataTag: {
     marginTop: spacing.xs,
-    backgroundColor: 'rgba(0,200,83,0.15)',
+    backgroundColor: colors.primaryLight,
     borderRadius: radius.sm,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
     alignSelf: 'flex-start',
   },
-  dataTagText: { color: colors.primary, fontSize: fontSize.xs },
+  dataTagText: { color: colors.primaryDark, fontSize: fontSize.xs, fontFamily: fontFamily.medium },
   typingIndicator: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.md },
   quickPrompts: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm, gap: spacing.xs, flexDirection: 'row', flexWrap: 'wrap' },
   quickPromptBtn: {
@@ -391,7 +392,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  quickPromptText: { color: colors.textSecondary, fontSize: fontSize.sm },
+  quickPromptText: { color: colors.textSecondary, fontSize: fontSize.sm, fontFamily: fontFamily.regular },
   imagePreviewRow: {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
@@ -444,12 +445,13 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
     borderRadius: radius.xl,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     color: colors.text,
     fontSize: fontSize.md,
+    fontFamily: fontFamily.regular,
     maxHeight: 120,
     borderWidth: 1,
     borderColor: colors.border,
@@ -462,8 +464,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendBtnDisabled: { backgroundColor: colors.surface },
-  sendIcon: { color: '#000', fontSize: fontSize.lg, fontWeight: '700' },
+  sendBtnDisabled: { backgroundColor: colors.border },
+  sendIcon: { color: '#FFFFFF', fontSize: fontSize.lg, fontWeight: '700' },
   recordingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -488,7 +490,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
     borderRadius: radius.xl,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -499,10 +501,10 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: radius.full,
-    backgroundColor: '#FF3B30',
+    backgroundColor: colors.error,
   },
-  recordingTime: { color: colors.text, fontSize: fontSize.md, fontWeight: '700' },
-  recordingHint: { color: colors.textMuted, fontSize: fontSize.sm },
+  recordingTime: { color: colors.text, fontSize: fontSize.md, fontFamily: fontFamily.semiBold },
+  recordingHint: { color: colors.textMuted, fontSize: fontSize.sm, fontFamily: fontFamily.regular },
   recordingStopBtn: {
     width: 42,
     height: 42,
@@ -511,5 +513,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  recordingStopIcon: { color: '#000', fontSize: fontSize.lg, fontWeight: '700' },
+  recordingStopIcon: { color: '#FFFFFF', fontSize: fontSize.lg, fontWeight: '700' },
 });

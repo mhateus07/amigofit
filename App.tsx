@@ -5,6 +5,13 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
 
 import ChatScreen from './src/screens/ChatScreen';
 import DiaryScreen from './src/screens/DiaryScreen';
@@ -18,7 +25,7 @@ import SplashScreen from './src/screens/SplashScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 import { UserProfile } from './src/types';
 import { storage, getToken, getStoredUser, clearToken, hydrateAiConfigFromProfile } from './src/services/storage';
-import { colors, fontSize } from './src/constants/theme';
+import { colors, fontSize, fontFamily } from './src/constants/theme';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null };
@@ -26,9 +33,9 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string |
   render() {
     if (this.state.error) {
       return (
-        <View style={{ flex: 1, backgroundColor: '#0F0F0F', justifyContent: 'center', padding: 24 }}>
-          <Text style={{ color: '#FF4444', fontSize: 16, fontWeight: 'bold', marginBottom: 8 }}>Erro:</Text>
-          <Text style={{ color: '#FFF', fontSize: 13 }}>{this.state.error}</Text>
+        <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', padding: 24 }}>
+          <Text style={{ color: colors.error, fontSize: 16, fontWeight: 'bold', marginBottom: 8 }}>Erro:</Text>
+          <Text style={{ color: colors.text, fontSize: 13 }}>{this.state.error}</Text>
         </View>
       );
     }
@@ -65,7 +72,7 @@ function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
-        tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: '600' },
+        tabBarLabelStyle: { fontSize: fontSize.xs, fontFamily: fontFamily.semiBold },
       }}
     >
       <Tab.Screen
@@ -112,6 +119,12 @@ function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
 }
 
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+  });
   const [splashDone, setSplashDone] = useState(false);
   const [authReady, setAuthReady]   = useState(false);
   const [authUser, setAuthUser]     = useState<{ id: string; name: string; email: string } | null>(null);
@@ -157,6 +170,10 @@ export default function App() {
     setShowAuth(false);
   };
 
+  if (!fontsLoaded) {
+    return <View style={{ flex: 1, backgroundColor: '#0B0B0C' }} />;
+  }
+
   // Splash always shows first
   if (!splashDone) {
     return (
@@ -182,7 +199,7 @@ export default function App() {
         <ErrorBoundary>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <SafeAreaProvider>
-              <StatusBar style="light" />
+              <StatusBar style="dark" />
               <AuthScreen onAuth={handleAuth} initialMode={authMode} />
             </SafeAreaProvider>
           </GestureHandlerRootView>
@@ -193,7 +210,7 @@ export default function App() {
       <ErrorBoundary>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <SafeAreaProvider>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
             <WelcomeScreen
               onLogin={() => { setAuthMode('login'); setShowAuth(true); }}
               onRegister={() => { setAuthMode('register'); setShowAuth(true); }}
@@ -209,7 +226,7 @@ export default function App() {
       <ErrorBoundary>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <SafeAreaProvider>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
             <OnboardingScreen authUser={authUser} onComplete={handleOnboardingComplete} />
           </SafeAreaProvider>
         </GestureHandlerRootView>
@@ -222,7 +239,7 @@ export default function App() {
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
           <NavigationContainer>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
             <MainTabs
               profile={profile!}
               authUser={authUser!}
