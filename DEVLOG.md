@@ -209,6 +209,16 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
 
 ---
 
+## Redesign visual — tema claro estilo Apple Health + fonte Inter — 2026-09-09
+
+- `src/constants/theme.ts`: paleta trocada de preto+verde neon para tema claro/neutro (fundo off-white, texto quase preto, verde desaturado como accent) — mudança de valores, aplicada automaticamente em todas as telas que já usavam `theme` (Auth, Diário, Dieta, Insights, Perfil, Onboarding, Welcome, Treino).
+- `ChatScreen.tsx` usada como piloto: além da paleta nova, recebeu ajustes de estilo próprios (espaçamento, bordas) para validar a direção visual antes de propagar refinamentos parecidos pras outras telas — as demais telas por enquanto só herdaram a cor, sem o polimento extra.
+- Fonte customizada Inter via `@expo-google-fonts/inter`, carregada em `App.tsx` (`useFonts`).
+- Bug corrigido de passagem: o early-return de "fonte ainda carregando" em `App()` estava antes de um `useEffect`, violando a ordem de hooks do React (`Rendered more hooks than during the previous render`) — movido pra depois de todos os hooks do componente.
+- Pendente: propagar o polimento extra do Chat (não só a cor) pras demais telas, se fizer sentido depois de validar a direção.
+
+---
+
 ## Próximos passos sugeridos
 
 - [ ] Substituir `assets/icon.png` e `assets/adaptive-icon.png` pelo ícone gerado no Lovart
