@@ -235,8 +235,16 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
   - `ios.appleTeamId` fixado no `app.json` (Personal Team do usuário) — sem isso, `expo prebuild` regenera o `project.pbxproj` sem o Development Team configurado, e builds via linha de comando (`xcodebuild`) falham com "No Account for Team".
   - `NSLocalNetworkUsageDescription` + `NSBonjourServices` no `Info.plist` (`ios.infoPlist`) — sem isso, o iOS bloqueia silenciosamente qualquer conexão do app pra um IP da rede local, e o app nunca consegue achar o Metro rodando no Mac (ficava preso na tela de splash sem erro nenhum).
 - **`aps-environment` continua reaparecendo** em todo `expo prebuild` (pegadinha já conhecida, ver ESCOPO.md) — precisa ser removido manualmente do `AmigoFit.entitlements` antes de cada build.
-- **Como rodar no iPhone físico a partir de agora:** abrir `ios/AmigoFit.xcworkspace` no Xcode, selecionar o iPhone como destino e rodar pelo botão ▶ Play (não pelo terminal sozinho) — neste Xcode/iOS específico, um launch sem debugger conectado falha de forma diferente e mais difícil de diagnosticar. O simulador continua configurado no projeto, mas o `Simulator.app` está ausente/quebrado nesta instalação do Xcode (ver risco #23 no ESCOPO.md) — precisa reinstalar/reparar o Xcode antes de testar por ali.
+- **Como rodar no iPhone físico a partir de agora:** abrir `ios/AmigoFit.xcworkspace` no Xcode, selecionar o iPhone como destino e rodar pelo botão ▶ Play (mais simples e confiável que `xcodebuild`/`devicectl` direto pelo terminal, mas depois de instalado o app abre normal mesmo sem o Xcode/debugger conectado — confirmado testando `devicectl device process launch` isolado). O simulador continua configurado no projeto, mas o `Simulator.app` está ausente/quebrado nesta instalação do Xcode (ver risco #23 no ESCOPO.md) — precisa reinstalar/reparar o Xcode antes de testar por ali.
 - Validado no iPhone físico do usuário: app abre, carrega o JS do Metro, splash em JS própria (`SplashScreen.tsx`) roda normalmente.
+
+### Build Release: app independente do Mac/Metro
+
+- Build de desenvolvimento (Debug) carrega o JS ao vivo do Metro rodando no Mac — exige Mac ligado, Metro ativo (`npx expo start`) e iPhone na mesma rede Wi-Fi. Sem isso o app abre mas trava numa tela vermelha de erro ("No script URL provided") ou fica preso na splash.
+- Gerada build **Release** pra uso independente: `xcodebuild -workspace ios/AmigoFit.xcworkspace -scheme AmigoFit -configuration Release -destination "id=<udid>" -allowProvisioningUpdates build` — nessa configuração o `main.jsbundle` (JS já compilado, ~4MB) fica empacotado dentro do próprio `.app`, e o `ReactNativeDelegate` (`AppDelegate.swift`) carrega ele direto do bundle em vez de pedir pro Metro (`#if DEBUG ... #else Bundle.main.url(forResource: "main", withExtension: "jsbundle") #endif`, já gerado assim pelo template do Expo).
+- API continua apontando pra produção (`https://amigofit-api.impulsiodigital.com`, valor de `EXPO_PUBLIC_API_BASE_URL` no `.env`, embutido no bundle em tempo de build) — não depende do Mac pra isso também.
+- **Testado e confirmado pelo usuário:** app instalado, Metro derrubado de propósito (`pkill -f "expo start"`) pra provar a independência, app aberto e funcionando normal sem o Mac/cabo USB conectado.
+- Trade-off: essa build fica "congelada" no código de quando foi compilada — pra atualizar com mudanças novas, precisa reconectar o iPhone e gerar uma Release nova (não tem hot reload, é o preço de não depender do Metro).
 
 ---
 
