@@ -1,5 +1,6 @@
 import React, { useState, useEffect, Component, ReactNode } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import * as ExpoSplashScreen from 'expo-splash-screen';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Text, View } from 'react-native';
@@ -12,6 +13,8 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
+
+ExpoSplashScreen.preventAutoHideAsync();
 
 import ChatScreen from './src/screens/ChatScreen';
 import DiaryScreen from './src/screens/DiaryScreen';
@@ -131,6 +134,12 @@ export default function App() {
   const [profile, setProfile]       = useState<UserProfile | null>(null);
   const [authMode, setAuthMode]     = useState<'login' | 'register'>('login');
   const [showAuth, setShowAuth]     = useState(false);
+
+  useEffect(() => {
+    if (fontsLoaded) {
+      ExpoSplashScreen.hideAsync();
+    }
+  }, [fontsLoaded]);
 
   useEffect(() => {
     const fallback = setTimeout(() => setAuthReady(true), 6000);

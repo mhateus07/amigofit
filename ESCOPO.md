@@ -45,7 +45,7 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 ## 2. Estado atual do projeto
 
 ### Stack
-- Frontend: React Native + Expo SDK 54 (TypeScript)
+- Frontend: React Native + Expo SDK 57 (TypeScript)
 - Backend: Node.js + Express (JavaScript)
 - Banco: PostgreSQL via Docker Compose
 - IA: Claude API (chat + extração de dados estruturados), com suporte multi-provider (OpenAI, Gemini, Groq) — BYOK, chave nunca armazenada no servidor
@@ -82,6 +82,8 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 19 | `openai/gpt-oss-120b` (modelo de raciocínio) quebra o modo `response_format: json_object` da Groq — `/api/extract` e `/api/insights` falhavam com "Failed to validate JSON", dados do chat não caíam no Diário sem erro visível pro usuário | `server/index.js` (`PROVIDER_MODELS`) | ✅ Corrigido em 2026-09-08 — ver risco #20, a troca inicial pra `llama-3.1-8b-instant` também falhou |
 | 20 | Os modelos Llama da Groq (`llama-3.1-8b-instant`, `llama-3.3-70b-versatile`) não são acessíveis em todas as contas Groq ("does not exist or you do not have access to it"), mesmo listados como "Production" na doc oficial | `server/index.js` (`PROVIDER_MODELS`) | ✅ Corrigido em 2026-09-08 — modelo final: `openai/gpt-oss-20b` (confirmado acessível) + `reasoning_effort: 'low'` e `max_tokens` maior nas chamadas com `response_format: json_object` (`groqReasoningOptions()`), pra evitar truncar o JSON com tokens de raciocínio |
 | 21 | Redesign visual (tema claro estilo Apple Health) trocou a paleta em todas as telas, mas o polimento extra de estilo (espaçamento, bordas) só foi aplicado na tela de Chat, usada como piloto | `src/screens/*.tsx` | Pendente — propagar pras demais telas se a direção for validada |
+| 22 | Splash nativa aparece pequena/centralizada em vez de tela cheia, desde a migração pro plugin `expo-splash-screen` (SDK 57) | `app.json` (config do plugin `expo-splash-screen`) | Pendente — cosmético, não bloqueia uso; app abre e funciona normal |
+| 23 | `Simulator.app` ausente/quebrado na instalação do Xcode do usuário — bloqueia teste via simulador (só o teste em iPhone físico funciona hoje) | Xcode.app local (fora do repo) | Pendente — precisa reinstalar/reparar o Xcode; ver decisão 2026-09-15 |
 
 ---
 
@@ -189,3 +191,4 @@ Prioridade recomendada quando chegar a hora: Integração Health/Fit > Relatóri
 - 2026-08-26: Priorizada integração com **Apple Saúde (HealthKit)** em vez de retomar o Health Connect (Android) — o uso diário real do app agora é no iPhone do usuário, não em Android, então HealthKit é o que traz valor imediato. Health Connect continua pausado/backlog.
 - 2026-09-09: Redesign visual iniciado — tema trocado de preto+verde neon pra claro/neutro estilo Apple Health (`src/constants/theme.ts`) + fonte Inter. Tela de Chat usada como piloto pro polimento extra antes de propagar pras demais telas (ver risco #21).
 - 2026-08-26 (achado, não bloqueante): `npx expo prebuild` sem `--clean` não remove entitlements de plugins removidos do `app.json` — mesmo depois de tirar `expo-notifications` dos plugins, a chave `aps-environment` reapareceu em `ios/AmigoFit/AmigoFit.entitlements` numa prebuild seguinte (rodada para adicionar o plugin do HealthKit). Precisou remoção manual da chave no arquivo depois de cada `prebuild`. Se voltar a acontecer, checar esse arquivo antes de abrir o Xcode.
+- 2026-09-15: Habilitado teste no iPhone físico do usuário (iPhone 17 Pro Max, iOS 27) além do simulador. Bug raiz: o Xcode 27/iOS 27 instalados no Mac do usuário **exigem** adoção do UIScene lifecycle do UIKit — sem isso o app nem inicializa (`Application failed to launch: UIScene life cycle is required for apps built with this SDK`), e nem o upgrade pra SDK 57 (mais atual disponível) resolveu sozinho, porque o template nativo do Expo ainda não adota Scene lifecycle. Corrigido via config plugin novo `plugins/withIosSceneLifecycle.js` (gera `SceneDelegate.swift`, registra no `project.pbxproj`, adiciona `UIApplicationSceneManifest` no `Info.plist`, move a criação da janela do `AppDelegate.swift` pro Scene delegate — tudo reaplicado em todo `expo prebuild`, já que `ios/` é gerado/gitignored). Detalhes completos e todos os ajustes auxiliares (upgrade SDK 54→57, `plugins/withIosMinDeploymentTargetFix.js`, `ios.appleTeamId`, permissão de rede local, migração do splash) no DEVLOG (entrada de 2026-09-15). Ver riscos #22 e #23 (pendências que sobraram: splash pequena e `Simulator.app` quebrado nesta instalação do Xcode).

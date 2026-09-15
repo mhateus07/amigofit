@@ -6,7 +6,7 @@ Registro de tudo que foi desenvolvido no projeto até agora.
 
 ## Stack
 
-- **Frontend:** React Native + Expo SDK 54 (TypeScript)
+- **Frontend:** React Native + Expo SDK 57 (TypeScript)
 - **Backend:** Node.js + Express (JavaScript)
 - **Banco de dados:** PostgreSQL via Docker Compose
 - **IA:** Anthropic Claude API (`claude-sonnet-4-6`) — chat e extração de dados
@@ -219,6 +219,27 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
 
 ---
 
+## Suporte a teste em iPhone físico + upgrade Expo SDK 54 → 57 (compatibilidade com iOS 27) — 2026-09-15
+
+- **Motivação:** usuário queria manter o simulador e passar a testar também no iPhone 17 Pro Max físico, com as duas opções disponíveis ao mesmo tempo.
+- **Bloqueio real encontrado:** o Xcode 27 / iOS 27 instalados no Mac do usuário **exigem** adoção do UIScene lifecycle do UIKit — sem isso o app falha até inicializar (`Application failed to launch: UIScene life cycle is required for apps built with this SDK`), com ou sem debugger conectado. Nem o Expo SDK 54 nem a SDK 57 (mais atual disponível publicamente) geram um `AppDelegate`/`Info.plist` com Scene lifecycle — é preciso adicionar manualmente.
+- **Correção principal:** `plugins/withIosSceneLifecycle.js` (config plugin novo, reaplicado em todo `expo prebuild` já que `ios/` é gerado e fica fora do git):
+  - Gera `ios/AmigoFit/SceneDelegate.swift` (assume a criação da `UIWindow` e a chamada `startReactNative`, que saem do `AppDelegate.swift`; também reencaminha deep links/universal links pro `RCTLinkingManager`, que antes só rodavam no `AppDelegate`).
+  - Registra o novo arquivo Swift no `project.pbxproj` (grupo + target de compilação) via manipulação direta com o pacote `xcode`.
+  - Adiciona `UIApplicationSceneManifest` no `Info.plist` apontando pro `SceneDelegate`.
+  - Ajusta o `AppDelegate.swift` gerado pelo Expo: remove a criação de janela de dentro de `didFinishLaunchingWithOptions` e adiciona `application(_:configurationForConnecting:options:)`.
+- **Upgrade de SDK (Expo 54 → 55 → 56 → 57, um de cada vez):** não resolveu o problema do Scene lifecycle sozinho (motivo de ter sido necessário o plugin acima), mas deixou o projeto na versão mais atual oficialmente suportada. Exigiu limpeza de config obsoleta no `app.json`: `newArchEnabled` e `android.edgeToEdgeEnabled` removidos (agora são sempre ligados, viraram erro de schema), `splash` (chave legada) migrado pro plugin `expo-splash-screen`.
+- **Efeito colateral da migração do splash:** o módulo `expo-splash-screen` (diferente da splash nativa antiga, que sumia sozinha) exige chamada explícita de `hideAsync()` em JS — sem isso a splash nativa ficava presa pra sempre por cima do app já carregado. Corrigido em `App.tsx`: `ExpoSplashScreen.preventAutoHideAsync()` no topo do arquivo + `ExpoSplashScreen.hideAsync()` num `useEffect` quando `fontsLoaded` fica `true`. Pendente: a splash nativa aparece pequena/centralizada em vez de tela cheia (ver risco #22 no ESCOPO.md) — cosmético, app funciona normal.
+- **Outros ajustes de infra pro build local funcionar no iPhone:**
+  - `plugins/withIosMinDeploymentTargetFix.js` — alguns Pods (RNSVG, RNCAsyncStorage) têm deployment target antigo (iOS 4.3–13.4) incompatível com o SDK do Xcode 27 (mínimo 15.0); o plugin força 15.1 em todos os targets do Pods em todo `pod install`.
+  - `ios.appleTeamId` fixado no `app.json` (Personal Team do usuário) — sem isso, `expo prebuild` regenera o `project.pbxproj` sem o Development Team configurado, e builds via linha de comando (`xcodebuild`) falham com "No Account for Team".
+  - `NSLocalNetworkUsageDescription` + `NSBonjourServices` no `Info.plist` (`ios.infoPlist`) — sem isso, o iOS bloqueia silenciosamente qualquer conexão do app pra um IP da rede local, e o app nunca consegue achar o Metro rodando no Mac (ficava preso na tela de splash sem erro nenhum).
+- **`aps-environment` continua reaparecendo** em todo `expo prebuild` (pegadinha já conhecida, ver ESCOPO.md) — precisa ser removido manualmente do `AmigoFit.entitlements` antes de cada build.
+- **Como rodar no iPhone físico a partir de agora:** abrir `ios/AmigoFit.xcworkspace` no Xcode, selecionar o iPhone como destino e rodar pelo botão ▶ Play (não pelo terminal sozinho) — neste Xcode/iOS específico, um launch sem debugger conectado falha de forma diferente e mais difícil de diagnosticar. O simulador continua configurado no projeto, mas o `Simulator.app` está ausente/quebrado nesta instalação do Xcode (ver risco #23 no ESCOPO.md) — precisa reinstalar/reparar o Xcode antes de testar por ali.
+- Validado no iPhone físico do usuário: app abre, carrega o JS do Metro, splash em JS própria (`SplashScreen.tsx`) roda normalmente.
+
+---
+
 ## Próximos passos sugeridos
 
 - [ ] Substituir `assets/icon.png` e `assets/adaptive-icon.png` pelo ícone gerado no Lovart
@@ -228,3 +249,5 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
 - [ ] Migrar `saveMessages` para upsert (evitar DELETE + re-insert)
 - [ ] Restringir CORS no servidor para domínios conhecidos
 - [ ] Migrar backend para TypeScript
+- [ ] Ajustar o `expo-splash-screen` pra tela cheia (hoje aparece pequena/centralizada) — ver risco #22 no ESCOPO.md
+- [ ] Reinstalar/reparar o Xcode do usuário pra restaurar o `Simulator.app` (ausente hoje, bloqueia teste via simulador) — ver risco #23 no ESCOPO.md

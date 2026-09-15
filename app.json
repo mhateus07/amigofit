@@ -6,7 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "plugins": [
       [
         "expo-notifications",
@@ -52,27 +51,40 @@
         }
       ],
       "expo-video",
-      "expo-font"
+      "expo-font",
+      "./plugins/withIosMinDeploymentTargetFix.js",
+      "./plugins/withIosSceneLifecycle.js",
+      "expo-sharing",
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-bg.png",
+          "resizeMode": "cover",
+          "backgroundColor": "#0F0F0F"
+        }
+      ],
+      "expo-asset"
     ],
-    "splash": {
-      "image": "./assets/splash-bg.png",
-      "resizeMode": "cover",
-      "backgroundColor": "#0F0F0F"
-    },
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Permite enviar fotos e prints para o AmigoFit analisar.",
-        "NSCameraUsageDescription": "Permite gravar vídeos de execução dos exercícios para anexar nas fichas de treino."
+        "NSCameraUsageDescription": "Permite gravar vídeos de execução dos exercícios para anexar nas fichas de treino.",
+        "NSLocalNetworkUsageDescription": "Permite conectar ao servidor de desenvolvimento (Metro) durante testes no aparelho.",
+        "NSBonjourServices": [
+          "_dev._tcp",
+          "_http._tcp"
+        ]
       },
-      "bundleIdentifier": "com.mhateus07.amigofit"
+      "bundleIdentifier": "com.mhateus07.amigofit",
+      "appleTeamId": "FLYUDYHKDQ"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
       "package": "com.anonymous.amigofit"
