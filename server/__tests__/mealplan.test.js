@@ -69,8 +69,10 @@ describe('Plano alimentar', () => {
       expect(res.status).toBe(400);
     });
 
-    it('substitui o plano em uma transação (delete + reinsert)', async () => {
-      mockClientQuery.mockResolvedValue({ rows: [] });
+    it('atualiza o plano em uma transação e arquiva o que saiu (sem apagar histórico)', async () => {
+      mockClientQuery.mockImplementation((sql) => Promise.resolve(
+        typeof sql === 'string' && sql.startsWith('SELECT name') ? { rows: [{ name: 'Almoço', time: '12:00', description: null, items: [] }], rowCount: 1 } : { rows: [], rowCount: 1 }
+      ));
 
       const res = await request(app)
         .post('/api/meal-plan')
@@ -80,7 +82,11 @@ describe('Plano alimentar', () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       expect(mockClientQuery).toHaveBeenCalledWith('BEGIN');
-      expect(mockClientQuery).toHaveBeenCalledWith('DELETE FROM meals WHERE user_id=$1', ['u_1']);
+      expect(mockClientQuery).toHaveBeenCalledWith(
+        expect.stringContaining('SET active=false'),
+        ['u_1', [expect.any(String)]]
+      );
+      expect(mockClientQuery).not.toHaveBeenCalledWith(expect.stringContaining('DELETE FROM meals'), expect.anything());
       expect(mockClientQuery).toHaveBeenCalledWith('COMMIT');
       expect(mockRelease).toHaveBeenCalled();
     });
@@ -138,7 +144,9 @@ describe('Plano alimentar', () => {
     });
 
     it('registra o check-in via upsert idempotente', async () => {
-      mockClientQuery.mockResolvedValue({ rows: [] });
+      mockClientQuery.mockImplementation((sql) => Promise.resolve(
+        typeof sql === 'string' && sql.startsWith('SELECT name') ? { rows: [{ name: 'Almoço', time: '12:00', description: null, items: [] }], rowCount: 1 } : { rows: [], rowCount: 1 }
+      ));
 
       const res = await request(app)
         .post('/api/meal-plan/checkins')
@@ -180,7 +188,9 @@ describe('Plano alimentar', () => {
     });
 
     it('ao marcar "skipped", só remove o dado de nutrição anterior (sem inserir de novo)', async () => {
-      mockClientQuery.mockResolvedValue({ rows: [] });
+      mockClientQuery.mockImplementation((sql) => Promise.resolve(
+        typeof sql === 'string' && sql.startsWith('SELECT name') ? { rows: [{ name: 'Almoço', time: '12:00', description: null, items: [] }], rowCount: 1 } : { rows: [], rowCount: 1 }
+      ));
 
       const res = await request(app)
         .post('/api/meal-plan/checkins')
@@ -202,6 +212,9 @@ describe('Plano alimentar', () => {
       mockClientQuery.mockImplementation((sql) => {
         if (typeof sql === 'string' && sql.startsWith('INSERT INTO meal_checkins')) {
           return Promise.reject(new Error('boom'));
+        }
+        if (typeof sql === 'string' && sql.startsWith('SELECT name')) {
+          return Promise.resolve({ rows: [{ name: 'Almoço', time: '12:00', description: null, items: [] }] });
         }
         return Promise.resolve({ rows: [] });
       });

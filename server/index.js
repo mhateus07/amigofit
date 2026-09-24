@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
+const { runMigrations } = require('./migrations');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -48,90 +49,7 @@ const videoUpload = multer({
 });
 
 async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS profiles (
-      user_id TEXT PRIMARY KEY REFERENCES users(id),
-      data JSONB NOT NULL,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      extracted_data JSONB,
-      timestamp BIGINT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS extracted_data (
-      id SERIAL PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
-      category TEXT NOT NULL,
-      label TEXT NOT NULL,
-      value TEXT NOT NULL,
-      raw_text TEXT,
-      timestamp BIGINT NOT NULL,
-      source_ref TEXT
-    );
-    CREATE TABLE IF NOT EXISTS meals (
-      id TEXT PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
-      name TEXT NOT NULL,
-      time TEXT NOT NULL,
-      description TEXT,
-      items JSONB,
-      source TEXT NOT NULL DEFAULT 'manual',
-      active BOOLEAN NOT NULL DEFAULT true,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS meal_checkins (
-      id SERIAL PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
-      meal_id TEXT REFERENCES meals(id) ON DELETE CASCADE,
-      date TEXT NOT NULL,
-      status TEXT NOT NULL,
-      checked_at BIGINT,
-      UNIQUE (meal_id, date)
-    );
-    CREATE TABLE IF NOT EXISTS workout_plans (
-      id TEXT PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
-      name TEXT NOT NULL,
-      day_label TEXT,
-      exercises JSONB NOT NULL DEFAULT '[]',
-      source TEXT NOT NULL DEFAULT 'manual',
-      active BOOLEAN NOT NULL DEFAULT true,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS workout_checkins (
-      id SERIAL PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
-      workout_plan_id TEXT REFERENCES workout_plans(id) ON DELETE CASCADE,
-      date TEXT NOT NULL,
-      status TEXT NOT NULL,
-      checked_at BIGINT,
-      UNIQUE (workout_plan_id, date)
-    );
-    CREATE TABLE IF NOT EXISTS exercise_videos (
-      id TEXT PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
-      filename TEXT NOT NULL,
-      mime_type TEXT NOT NULL,
-      size_bytes INTEGER NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-  // Coluna adicionada depois que a tabela já existia em produção -
-  // CREATE TABLE IF NOT EXISTS não altera tabelas existentes.
-  await pool.query(`ALTER TABLE extracted_data ADD COLUMN IF NOT EXISTS source_ref TEXT;`);
+  await runMigrations(pool);
   console.log('Database ready');
 }
 
@@ -171,7 +89,7 @@ app.use(cors({
     callback(new Error('Origem não permitida pelo CORS'));
   },
   allowedHeaders: ['Content-Type', 'x-api-key', 'x-provider', 'Authorization'],
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   preflightContinue: false,
   optionsSuccessStatus: 204,
 }));
@@ -195,6 +113,23 @@ function requireAuth(req, res, next) {
   } catch {
     return res.status(401).json({ error: 'Token inválido ou expirado' });
   }
+}
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const CHECKIN_STATUSES = ['done', 'skipped'];
+
+function isValidDate(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function newId(prefix) {
+  return prefix + crypto.randomUUID();
 }
 
 // ── AI provider config ────────────────────────────────────
@@ -846,49 +781,112 @@ app.post('/api/profile', requireAuth, async (req, res) => {
 });
 
 // ── Messages ──────────────────────────────────────────────
-app.get('/api/messages', requireAuth, async (req, res) => {
-  const { rows } = await pool.query(
-    'SELECT id, role, content, extracted_data, timestamp FROM messages WHERE user_id=$1 ORDER BY timestamp ASC',
-    [req.userId]
+// Cada mensagem é gravada individualmente (PUT idempotente por id). Antes o
+// cliente mandava a conversa inteira e o servidor apagava o que não estivesse
+// na lista — dois aparelhos, ou gravações fora de ordem, apagavam mensagens.
+const MESSAGE_ROLES = ['user', 'assistant'];
+const MAX_MESSAGE_LENGTH = 20000;
+
+function validateMessage(m) {
+  if (!m || typeof m !== 'object') return 'mensagem inválida';
+  if (typeof m.id !== 'string' || !m.id || m.id.length > 100) return 'id inválido';
+  if (!MESSAGE_ROLES.includes(m.role)) return 'role inválido';
+  if (typeof m.content !== 'string' || m.content.length > MAX_MESSAGE_LENGTH) return 'content inválido';
+  if (!Number.isFinite(m.timestamp)) return 'timestamp inválido';
+  return null;
+}
+
+// Retorna false se o id já pertence a outra conta (nada é alterado nesse caso).
+async function upsertMessage(db, userId, m) {
+  const { rowCount } = await db.query(
+    `INSERT INTO messages (id, user_id, role, content, extracted_data, timestamp)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (id) DO UPDATE SET
+       role = EXCLUDED.role,
+       content = EXCLUDED.content,
+       extracted_data = EXCLUDED.extracted_data,
+       timestamp = EXCLUDED.timestamp
+     WHERE messages.user_id = EXCLUDED.user_id`,
+    [m.id, userId, m.role, m.content, JSON.stringify(m.extractedData || null), m.timestamp]
   );
-  res.json({ messages: rows.map(r => ({ ...r, timestamp: Number(r.timestamp), extractedData: r.extracted_data })) });
+  return rowCount > 0;
+}
+
+app.get('/api/messages', requireAuth, async (req, res) => {
+  // Sem limit, devolve o histórico completo (usado por reprocessamento/export).
+  // Com limit, devolve as N mensagens mais recentes antes de "before".
+  const limit = req.query.limit ? Math.min(Math.max(parseInt(req.query.limit, 10) || 0, 1), 500) : null;
+  const before = req.query.before ? Number(req.query.before) : null;
+  if (before !== null && !Number.isFinite(before)) return res.status(400).json({ error: 'before inválido' });
+
+  let rows;
+  if (limit) {
+    ({ rows } = await pool.query(
+      `SELECT id, role, content, extracted_data, timestamp FROM messages
+       WHERE user_id=$1 AND ($2::bigint IS NULL OR timestamp < $2)
+       ORDER BY timestamp DESC LIMIT $3`,
+      [req.userId, before, limit + 1]
+    ));
+  } else {
+    ({ rows } = await pool.query(
+      'SELECT id, role, content, extracted_data, timestamp FROM messages WHERE user_id=$1 ORDER BY timestamp ASC',
+      [req.userId]
+    ));
+  }
+  const hasMore = limit ? rows.length > limit : false;
+  if (limit) rows = rows.slice(0, limit).reverse();
+  res.json({
+    messages: rows.map(r => ({ id: r.id, role: r.role, content: r.content, timestamp: Number(r.timestamp), extractedData: r.extracted_data || undefined })),
+    hasMore,
+  });
 });
 
+app.put('/api/messages/:id', requireAuth, async (req, res) => {
+  const m = { ...req.body, id: req.params.id };
+  const invalid = validateMessage(m);
+  if (invalid) return res.status(400).json({ error: invalid });
+  try {
+    const ok = await upsertMessage(pool, req.userId, m);
+    if (!ok) return res.status(409).json({ error: 'Conflito de identificador de mensagem' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Save message error:', e.message);
+    res.status(500).json({ error: 'Erro ao salvar mensagem' });
+  }
+});
+
+// Gravação em lote (upsert). Mantido para versões antigas do app, mas NÃO
+// apaga mais as mensagens ausentes da lista — isso agora é DELETE /api/messages.
 app.post('/api/messages', requireAuth, async (req, res) => {
   const { messages } = req.body;
   if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages must be array' });
+  for (const m of messages) {
+    const invalid = validateMessage(m);
+    if (invalid) return res.status(400).json({ error: invalid });
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // O cliente sempre envia a lista completa e atual de mensagens. Em vez de apagar
-    // tudo e reinserir (reescreve a tabela inteira a cada mensagem nova), removemos só
-    // as que não estão mais na lista (ex: "Limpar chat") e fazemos upsert do resto.
-    const ids = messages.map((m) => m.id);
-    await client.query(
-      'DELETE FROM messages WHERE user_id=$1 AND NOT (id = ANY($2::text[]))',
-      [req.userId, ids]
-    );
     for (const m of messages) {
-      await client.query(
-        `INSERT INTO messages (id, user_id, role, content, extracted_data, timestamp)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (id) DO UPDATE SET
-           role = EXCLUDED.role,
-           content = EXCLUDED.content,
-           extracted_data = EXCLUDED.extracted_data,
-           timestamp = EXCLUDED.timestamp`,
-        [m.id, req.userId, m.role, m.content, JSON.stringify(m.extractedData || null), m.timestamp]
-      );
+      if (!(await upsertMessage(client, req.userId, m))) {
+        throw new HttpError(409, 'Conflito de identificador de mensagem');
+      }
     }
     await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
     await client.query('ROLLBACK');
+    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
     console.error('Save messages error:', e.message);
     res.status(500).json({ error: 'Erro ao salvar mensagens' });
   } finally {
     client.release();
   }
+});
+
+app.delete('/api/messages', requireAuth, async (req, res) => {
+  await pool.query('DELETE FROM messages WHERE user_id=$1', [req.userId]);
+  res.json({ ok: true });
 });
 
 // ── Extracted Data ────────────────────────────────────────
@@ -927,18 +925,34 @@ app.post('/api/meal-plan', requireAuth, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM meals WHERE user_id=$1', [req.userId]);
+    // Atualiza as refeições que já existem e arquiva (active=false) as que saíram
+    // do plano, em vez de apagar e recriar: apagar levava junto, via cascade,
+    // todo o histórico de check-ins.
+    const ids = [];
     for (const [i, m] of meals.entries()) {
-      const id = m.id || ('meal_' + Math.random().toString(36).slice(2) + Date.now().toString(36));
-      await client.query(
-        'INSERT INTO meals (id, user_id, name, time, description, items, source, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      const id = m.id || newId('meal_');
+      const { rowCount } = await client.query(
+        `INSERT INTO meals (id, user_id, name, time, description, items, source, sort_order, active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name, time = EXCLUDED.time, description = EXCLUDED.description,
+           items = EXCLUDED.items, source = EXCLUDED.source, sort_order = EXCLUDED.sort_order, active = true
+         WHERE meals.user_id = EXCLUDED.user_id`,
         [id, req.userId, m.name, m.time, m.description || null, JSON.stringify(m.items || []), m.source || 'manual', i]
       );
+      // rowCount 0 = o id já pertence a outra conta.
+      if (rowCount === 0) throw new HttpError(409, 'Conflito de identificador de refeição');
+      ids.push(id);
     }
+    await client.query(
+      'UPDATE meals SET active=false WHERE user_id=$1 AND active=true AND NOT (id = ANY($2::text[]))',
+      [req.userId, ids]
+    );
     await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
     await client.query('ROLLBACK');
+    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
     console.error('Save meal plan error:', e.message);
     res.status(500).json({ error: 'Erro ao salvar plano alimentar' });
   } finally {
@@ -959,13 +973,25 @@ app.get('/api/meal-plan/checkins', requireAuth, async (req, res) => {
 app.post('/api/meal-plan/checkins', requireAuth, async (req, res) => {
   const { mealId, date, status } = req.body;
   if (!mealId || !date || !status) return res.status(400).json({ error: 'mealId, date e status são obrigatórios' });
+  if (!isValidDate(date)) return res.status(400).json({ error: 'date deve estar no formato AAAA-MM-DD' });
+  if (!CHECKIN_STATUSES.includes(status)) return res.status(400).json({ error: 'status inválido' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Só aceita check-in em refeição da própria conta (a FK composta no banco
+    // garante o mesmo; aqui devolvemos um 404 claro em vez de erro 500).
+    const { rows } = await client.query(
+      'SELECT name, time, description, items FROM meals WHERE id=$1 AND user_id=$2',
+      [mealId, req.userId]
+    );
+    const meal = rows[0];
+    if (!meal) throw new HttpError(404, 'Refeição não encontrada');
+
     const checkedAt = Date.now();
     await client.query(
       `INSERT INTO meal_checkins (user_id, meal_id, date, status, checked_at) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (meal_id, date) DO UPDATE SET status=$4, checked_at=$5`,
+       ON CONFLICT (meal_id, date) DO UPDATE SET status=$4, checked_at=$5
+       WHERE meal_checkins.user_id = EXCLUDED.user_id`,
       [req.userId, mealId, date, status, checkedAt]
     );
 
@@ -975,26 +1001,20 @@ app.post('/api/meal-plan/checkins', requireAuth, async (req, res) => {
     const sourceRef = `meal_checkin:${mealId}:${date}`;
     await client.query('DELETE FROM extracted_data WHERE user_id=$1 AND source_ref=$2', [req.userId, sourceRef]);
     if (status === 'done') {
-      const { rows } = await client.query(
-        'SELECT name, time, description, items FROM meals WHERE id=$1 AND user_id=$2',
-        [mealId, req.userId]
+      const value = meal.description
+        || (Array.isArray(meal.items) && meal.items.length ? meal.items.join(', ') : 'Refeição registrada');
+      await client.query(
+        `INSERT INTO extracted_data (user_id, category, label, value, raw_text, timestamp, source_ref)
+         VALUES ($1,'nutrition',$2,$3,$4,$5,$6)`,
+        [req.userId, meal.name, value, `Marcado como feita no plano alimentar (${meal.time})`, checkedAt, sourceRef]
       );
-      const meal = rows[0];
-      if (meal) {
-        const value = meal.description
-          || (Array.isArray(meal.items) && meal.items.length ? meal.items.join(', ') : 'Refeição registrada');
-        await client.query(
-          `INSERT INTO extracted_data (user_id, category, label, value, raw_text, timestamp, source_ref)
-           VALUES ($1,'nutrition',$2,$3,$4,$5,$6)`,
-          [req.userId, meal.name, value, `Marcado como feita no plano alimentar (${meal.time})`, checkedAt, sourceRef]
-        );
-      }
     }
 
     await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
     await client.query('ROLLBACK');
+    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
     console.error('Checkin error:', e.message);
     res.status(500).json({ error: 'Erro ao registrar check-in' });
   } finally {
@@ -1017,18 +1037,32 @@ app.post('/api/workout-plans', requireAuth, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM workout_plans WHERE user_id=$1', [req.userId]);
+    // Mesmo esquema do plano alimentar: atualiza/insere e arquiva as fichas
+    // removidas, preservando o histórico de check-ins.
+    const ids = [];
     for (const [i, p] of plans.entries()) {
-      const id = p.id || ('wp_' + Math.random().toString(36).slice(2) + Date.now().toString(36));
-      await client.query(
-        'INSERT INTO workout_plans (id, user_id, name, day_label, exercises, source, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      const id = p.id || newId('wp_');
+      const { rowCount } = await client.query(
+        `INSERT INTO workout_plans (id, user_id, name, day_label, exercises, source, sort_order, active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,true)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name, day_label = EXCLUDED.day_label, exercises = EXCLUDED.exercises,
+           source = EXCLUDED.source, sort_order = EXCLUDED.sort_order, active = true
+         WHERE workout_plans.user_id = EXCLUDED.user_id`,
         [id, req.userId, p.name, p.dayLabel || null, JSON.stringify(p.exercises || []), p.source || 'manual', i]
       );
+      if (rowCount === 0) throw new HttpError(409, 'Conflito de identificador de ficha');
+      ids.push(id);
     }
+    await client.query(
+      'UPDATE workout_plans SET active=false WHERE user_id=$1 AND active=true AND NOT (id = ANY($2::text[]))',
+      [req.userId, ids]
+    );
     await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
     await client.query('ROLLBACK');
+    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
     console.error('Save workout plans error:', e.message);
     res.status(500).json({ error: 'Erro ao salvar fichas de treino' });
   } finally {
@@ -1049,13 +1083,23 @@ app.get('/api/workout-plans/checkins', requireAuth, async (req, res) => {
 app.post('/api/workout-plans/checkins', requireAuth, async (req, res) => {
   const { workoutPlanId, date, status } = req.body;
   if (!workoutPlanId || !date || !status) return res.status(400).json({ error: 'workoutPlanId, date e status são obrigatórios' });
+  if (!isValidDate(date)) return res.status(400).json({ error: 'date deve estar no formato AAAA-MM-DD' });
+  if (!CHECKIN_STATUSES.includes(status)) return res.status(400).json({ error: 'status inválido' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const { rows } = await client.query(
+      'SELECT name, exercises FROM workout_plans WHERE id=$1 AND user_id=$2',
+      [workoutPlanId, req.userId]
+    );
+    const plan = rows[0];
+    if (!plan) throw new HttpError(404, 'Ficha de treino não encontrada');
+
     const checkedAt = Date.now();
     await client.query(
       `INSERT INTO workout_checkins (user_id, workout_plan_id, date, status, checked_at) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (workout_plan_id, date) DO UPDATE SET status=$4, checked_at=$5`,
+       ON CONFLICT (workout_plan_id, date) DO UPDATE SET status=$4, checked_at=$5
+       WHERE workout_checkins.user_id = EXCLUDED.user_id`,
       [req.userId, workoutPlanId, date, status, checkedAt]
     );
 
@@ -1066,26 +1110,20 @@ app.post('/api/workout-plans/checkins', requireAuth, async (req, res) => {
     const sourceRef = `workout_checkin:${workoutPlanId}:${date}`;
     await client.query('DELETE FROM extracted_data WHERE user_id=$1 AND source_ref=$2', [req.userId, sourceRef]);
     if (status === 'done') {
-      const { rows } = await client.query(
-        'SELECT name, exercises FROM workout_plans WHERE id=$1 AND user_id=$2',
-        [workoutPlanId, req.userId]
+      const exerciseNames = Array.isArray(plan.exercises) ? plan.exercises.map(e => e.name).filter(Boolean) : [];
+      const value = exerciseNames.length ? exerciseNames.join(', ') : 'Treino registrado';
+      await client.query(
+        `INSERT INTO extracted_data (user_id, category, label, value, raw_text, timestamp, source_ref)
+         VALUES ($1,'workout',$2,$3,$4,$5,$6)`,
+        [req.userId, plan.name, value, 'Marcado como concluído na ficha de treino', checkedAt, sourceRef]
       );
-      const plan = rows[0];
-      if (plan) {
-        const exerciseNames = Array.isArray(plan.exercises) ? plan.exercises.map(e => e.name).filter(Boolean) : [];
-        const value = exerciseNames.length ? exerciseNames.join(', ') : 'Treino registrado';
-        await client.query(
-          `INSERT INTO extracted_data (user_id, category, label, value, raw_text, timestamp, source_ref)
-           VALUES ($1,'workout',$2,$3,$4,$5,$6)`,
-          [req.userId, plan.name, value, 'Marcado como concluído na ficha de treino', checkedAt, sourceRef]
-        );
-      }
     }
 
     await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
     await client.query('ROLLBACK');
+    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
     console.error('Workout checkin error:', e.message);
     res.status(500).json({ error: 'Erro ao registrar check-in de treino' });
   } finally {
@@ -1274,4 +1312,4 @@ if (require.main === module) {
   }).catch(err => { console.error('DB init failed:', err); process.exit(1); });
 }
 
-module.exports = { app, pool, JWT_SECRET };
+module.exports = { app, pool, initDB, JWT_SECRET };
