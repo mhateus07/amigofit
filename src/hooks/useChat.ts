@@ -13,10 +13,11 @@ const PAGE_SIZE = 100;
 export type ChatLoadState = 'loading' | 'ready' | 'error';
 
 function friendlyAiError(errText: string): string {
-  const isBilling = errText.includes('credit balance') || errText.includes('insufficient_quota');
+  // Anthropic: "credit balance"; OpenAI: "insufficient_quota" / "no credits remaining".
+  const isBilling = /credit balance|insufficient_quota|no credits|exceeded your current quota/i.test(errText);
   const isMissingKey = errText.includes('API key ausente');
   const isAuth = (errText.includes('invalid') && errText.includes('key')) || errText.includes('authentication') || errText.includes('401');
-  if (isBilling) return 'Saldo insuficiente na API. Acesse o painel do seu provedor para adicionar créditos.';
+  if (isBilling) return 'Seu provedor de IA está sem créditos. Adicione créditos no painel dele, ou troque de provedor em Perfil (⚙️ na aba Hoje) → Configuração da IA.';
   if (isMissingKey) return 'Para ativar a IA, vá em Perfil → Configuração da IA e adicione sua chave de API.';
   if (isAuth) return 'Chave de API inválida. Vá em Perfil → Configuração da IA e verifique sua chave.';
   return `Erro: ${errText}`;
