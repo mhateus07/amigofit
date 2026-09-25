@@ -199,6 +199,23 @@ const MIGRATIONS = [
       CREATE INDEX workout_set_logs_day_idx ON workout_set_logs (user_id, date);
     `,
   },
+  {
+    id: 5,
+    name: 'fotos dos exercícios (extraídas do PDF da ficha) e rotina da ficha',
+    sql: `
+      CREATE TABLE exercise_images (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX exercise_images_user_idx ON exercise_images (user_id);
+      -- Nome da rotina do personal (ex.: "Hipertrofia 02"), comum às fichas A/B/C.
+      ALTER TABLE workout_plans ADD COLUMN routine TEXT;
+    `,
+  },
 ];
 
 async function runMigrations(pool, migrations = MIGRATIONS) {

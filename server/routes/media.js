@@ -12,8 +12,10 @@ const router = express.Router();
 // docker-compose.yml) — sem isso, os arquivos somem a cada deploy.
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads/exercise-videos');
 const CHAT_IMAGE_DIR = process.env.CHAT_IMAGE_DIR || path.join(UPLOAD_DIR, '..', 'chat-images');
+const EXERCISE_IMAGE_DIR = path.join(UPLOAD_DIR, '..', 'exercise-images');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(CHAT_IMAGE_DIR, { recursive: true });
+fs.mkdirSync(EXERCISE_IMAGE_DIR, { recursive: true });
 
 // Limites de armazenamento por usuário.
 const VIDEO_QUOTA_BYTES = Number(process.env.VIDEO_QUOTA_BYTES) || 1024 * 1024 * 1024; // 1 GB
@@ -42,9 +44,27 @@ function unlinkQuiet(file) {
   fs.unlink(file, () => {});
 }
 
-function removeFiles({ videos = [], images = [] }) {
+function removeFiles({ videos = [], images = [], exerciseImages = [] }) {
   videos.forEach((f) => unlinkQuiet(path.join(UPLOAD_DIR, f)));
   images.forEach((f) => unlinkQuiet(path.join(CHAT_IMAGE_DIR, f)));
+  exerciseImages.forEach((f) => unlinkQuiet(path.join(EXERCISE_IMAGE_DIR, f)));
+}
+
+// Foto de exercício recortada do PDF da ficha (JPEG já pequeno, ~25 KB).
+async function saveExerciseImage(userId, jpeg) {
+  const id = crypto.randomUUID();
+  const filename = `${id}.jpg`;
+  await fs.promises.writeFile(path.join(EXERCISE_IMAGE_DIR, filename), jpeg);
+  try {
+    await pool.query(
+      'INSERT INTO exercise_images (id, user_id, filename, mime_type, size_bytes) VALUES ($1,$2,$3,$4,$5)',
+      [id, userId, filename, 'image/jpeg', jpeg.length]
+    );
+  } catch (e) {
+    unlinkQuiet(path.join(EXERCISE_IMAGE_DIR, filename));
+    throw e;
+  }
+  return id;
 }
 
 // ── Vídeos de exercício ───────────────────────────────────
@@ -132,6 +152,20 @@ router.get('/chat-images/:id/file', async (req, res) => {
   });
 });
 
+router.get('/exercise-images/:id/file', async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT filename, mime_type FROM exercise_images WHERE id=$1 AND user_id=$2',
+    [req.params.id, req.userId]
+  );
+  if (!rows.length) return res.status(404).end();
+  res.type(rows[0].mime_type);
+  // Imagem imutável (id novo a cada upload): o app pode guardar em cache.
+  res.set('Cache-Control', 'private, max-age=31536000, immutable');
+  res.sendFile(path.join(EXERCISE_IMAGE_DIR, rows[0].filename), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
+
 // ── Limpeza de órfãos ─────────────────────────────────────
 // Remove (1) vídeos que nenhuma ficha — ativa ou arquivada — referencia,
 // (2) imagens que nenhuma mensagem referencia e (3) arquivos no disco sem
@@ -151,11 +185,23 @@ async function cleanupOrphans() {
     WHERE i.created_at < NOW() - INTERVAL '1 day'
       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.user_id = i.user_id AND m.image_id = i.id)
     RETURNING filename`);
-  removeFiles({ videos: videos.rows.map((r) => r.filename), images: images.rows.map((r) => r.filename) });
+  const exerciseImages = await pool.query(`
+    DELETE FROM exercise_images x
+    WHERE x.created_at < NOW() - INTERVAL '1 day'
+      AND NOT EXISTS (
+        SELECT 1 FROM workout_plans p, jsonb_array_elements(p.exercises) e
+        WHERE p.user_id = x.user_id AND e->>'imageId' = x.id
+      )
+    RETURNING filename`);
+  removeFiles({
+    videos: videos.rows.map((r) => r.filename),
+    images: images.rows.map((r) => r.filename),
+    exerciseImages: exerciseImages.rows.map((r) => r.filename),
+  });
 
   let strayFiles = 0;
   const dayAgo = Date.now() - 86400000;
-  for (const [dir, table] of [[UPLOAD_DIR, 'exercise_videos'], [CHAT_IMAGE_DIR, 'chat_images']]) {
+  for (const [dir, table] of [[UPLOAD_DIR, 'exercise_videos'], [CHAT_IMAGE_DIR, 'chat_images'], [EXERCISE_IMAGE_DIR, 'exercise_images']]) {
     const { rows } = await pool.query(`SELECT filename FROM ${table}`);
     const known = new Set(rows.map((r) => r.filename));
     for (const name of await fs.promises.readdir(dir)) {
@@ -167,11 +213,13 @@ async function cleanupOrphans() {
       }
     }
   }
-  const total = videos.rowCount + images.rowCount + strayFiles;
-  if (total) console.log(`[limpeza] ${videos.rowCount} vídeo(s), ${images.rowCount} imagem(ns) e ${strayFiles} arquivo(s) solto(s) removidos`);
-  return { videos: videos.rowCount, images: images.rowCount, strayFiles };
+  const total = videos.rowCount + images.rowCount + exerciseImages.rowCount + strayFiles;
+  if (total) console.log(`[limpeza] ${videos.rowCount} vídeo(s), ${images.rowCount + exerciseImages.rowCount} imagem(ns) e ${strayFiles} arquivo(s) solto(s) removidos`);
+  return { videos: videos.rowCount, images: images.rowCount, exerciseImages: exerciseImages.rowCount, strayFiles };
 }
 
 module.exports = router;
 module.exports.cleanupOrphans = cleanupOrphans;
 module.exports.removeFiles = removeFiles;
+module.exports.saveExerciseImage = saveExerciseImage;
+module.exports.UPLOAD_ROOT = path.join(UPLOAD_DIR, '..');

@@ -8,6 +8,22 @@ process.env.AI_KEYS_SECRET = 'segredo-de-teste-com-mais-de-32-caracteres';
 process.env.NODE_ENV = 'test';
 process.env.UPLOAD_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'amigofit-up-')) + '/exercise-videos';
 
+// O leitor de layout usa pdfjs (ESM), que o Jest deste projeto não carrega;
+// ele tem testes próprios (workoutPdf.test.js) e foi validado nos PDFs reais.
+jest.mock('../ai/workoutPdf', () => ({
+  extractWorkoutFromPdfLayout: jest.fn(async () => ({
+    routine: 'Hipertrofia 02',
+    plan: {
+      name: 'Treino B',
+      dayLabel: 'H2- B',
+      exercises: [
+        { name: 'Desenvolvimento c/ barra pronta', sets: 3, reps: '10-6-6', load: '22/26Kg', restSeconds: 90, photo: Buffer.from('jpeg-1') },
+        { name: 'Tríceps puxador corda', sets: 3, reps: '12', load: '41kg', restSeconds: 90, photo: null },
+      ],
+    },
+  })),
+}));
+
 jest.mock('@anthropic-ai/sdk', () => {
   const mCreate = jest.fn();
   const MockAnthropic = jest.fn().mockImplementation(() => ({ messages: { create: mCreate } }));
@@ -46,14 +62,14 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE meal_checkins, workout_checkins, workout_set_logs, extracted_data, messages, meals, workout_plans, ai_keys, profiles, chat_images RESTART IDENTITY`);
+  await pool.query(`TRUNCATE meal_checkins, workout_checkins, workout_set_logs, exercise_images, extracted_data, messages, meals, workout_plans, ai_keys, profiles, chat_images RESTART IDENTITY`);
 });
 
 describe('migrações', () => {
   it('são idempotentes (rodar de novo não falha nem reaplica)', async () => {
     await initDB();
     const { rows } = await pool.query('SELECT id FROM schema_migrations ORDER BY id');
-    expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining([1, 2, 3, 4]));
+    expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining([1, 2, 3, 4, 5]));
   });
 });
 
@@ -433,5 +449,60 @@ describe('séries realizadas', () => {
       .send({ workoutPlanId: 'w1', exerciseId: 'e1', exerciseName: 'Supino', date: '2026-09-10', sets: [{ reps: 10, loadKg: 40 }] });
     const hist = await request(app).get('/api/workout-logs/history?exercise=Supino').set('Authorization', B);
     expect(hist.body.history).toEqual([]);
+  });
+});
+
+describe('ficha em PDF enviada em partes', () => {
+  const pdf = Buffer.from('%PDF-1.4 ficha grande de teste '.repeat(4000));
+
+  async function sendInChunks(token, chunkSize = 50_000) {
+    const { body } = await request(app).post('/api/uploads').set('Authorization', token)
+      .send({ size: pdf.length, mimeType: 'application/pdf' }).expect(200);
+    for (let i = 0, index = 0; i < pdf.length; i += chunkSize, index++) {
+      await request(app).put(`/api/uploads/${body.id}/chunks/${index}`).set('Authorization', token)
+        .send({ data: pdf.subarray(i, i + chunkSize).toString('base64') }).expect(200);
+    }
+    return body.id;
+  }
+
+  it('recebe o arquivo em partes, lê a ficha e guarda a foto de cada exercício (sem chave de IA)', async () => {
+    const id = await sendInChunks(B); // B não tem chave de IA: o leitor de layout não precisa
+    const res = await request(app).post(`/api/extract-workout/upload/${id}`).set('Authorization', B).expect(200);
+    expect(res.body.method).toBe('layout');
+    const [plan] = res.body.plans;
+    expect(plan).toMatchObject({ name: 'Treino B', dayLabel: 'H2- B', routine: 'Hipertrofia 02' });
+    expect(plan.exercises[0].imageId).toEqual(expect.any(String));
+    expect(plan.exercises[1].imageId).toBeUndefined();
+
+    // Foto acessível só para o dono.
+    const file = await request(app).get(`/api/exercise-images/${plan.exercises[0].imageId}/file`).set('Authorization', B).expect(200);
+    expect(file.body.toString()).toBe('jpeg-1');
+    await request(app).get(`/api/exercise-images/${plan.exercises[0].imageId}/file`).set('Authorization', A).expect(404);
+
+    // Salvar a ficha guarda rotina e foto.
+    await request(app).post('/api/workout-plans').set('Authorization', B).send({ plans: [{ ...plan, id: 'wb' }] }).expect(200);
+    const saved = await request(app).get('/api/workout-plans').set('Authorization', B);
+    expect(saved.body.plans[0]).toMatchObject({ routine: 'Hipertrofia 02' });
+    expect(saved.body.plans[0].exercises[0].imageId).toBe(plan.exercises[0].imageId);
+
+    // O envio é consumido: não dá para processar de novo.
+    await request(app).post(`/api/extract-workout/upload/${id}`).set('Authorization', B).expect(404);
+  });
+
+  it('partes fora de ordem são recusadas, repetidas são aceitas, e outra conta não usa o envio', async () => {
+    const { body } = await request(app).post('/api/uploads').set('Authorization', A)
+      .send({ size: 10, mimeType: 'application/pdf' }).expect(200);
+    const part = Buffer.from('12345').toString('base64');
+    await request(app).put(`/api/uploads/${body.id}/chunks/1`).set('Authorization', A).send({ data: part }).expect(409);
+    await request(app).put(`/api/uploads/${body.id}/chunks/0`).set('Authorization', A).send({ data: part }).expect(200);
+    await request(app).put(`/api/uploads/${body.id}/chunks/0`).set('Authorization', A).send({ data: part }).expect(200);
+    await request(app).put(`/api/uploads/${body.id}/chunks/1`).set('Authorization', B).send({ data: part }).expect(404);
+    // Incompleto: 5 de 10 bytes.
+    await request(app).post(`/api/extract-workout/upload/${body.id}`).set('Authorization', A).expect(400);
+  });
+
+  it('recusa arquivo acima do limite e tipo diferente de PDF', async () => {
+    await request(app).post('/api/uploads').set('Authorization', A).send({ size: 300 * 1024 * 1024, mimeType: 'application/pdf' }).expect(413);
+    await request(app).post('/api/uploads').set('Authorization', A).send({ size: 10, mimeType: 'video/mp4' }).expect(400);
   });
 });

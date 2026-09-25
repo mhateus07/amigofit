@@ -13,24 +13,11 @@ import { storage } from '../services/storage';
 import { errorMessage } from '../services/api';
 import { syncAppleHealth } from '../services/appleHealth';
 import WorkoutSessionModal from '../components/WorkoutSessionModal';
+import { pickTodayPlan } from '../utils/workout';
 import { colors, spacing, radius, fontSize, fontFamily, shadow } from '../constants/theme';
 
 // Resumo do dia num lugar só: próximo treino, refeições pendentes e ações
 // rápidas — antes a rotina ficava espalhada entre seis abas.
-
-const WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
-
-function normalize(text: string): string {
-  return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-}
-
-// Ficha do dia: a que tem o dia da semana no rótulo; senão a primeira ainda
-// não feita hoje.
-function pickTodayPlan(plans: WorkoutPlan[], doneIds: Set<string>): WorkoutPlan | null {
-  const weekday = normalize(WEEKDAYS[new Date().getDay()]);
-  const byDay = plans.find((p) => p.dayLabel && normalize(p.dayLabel).includes(weekday));
-  return byDay ?? plans.find((p) => !doneIds.has(p.id)) ?? plans[0] ?? null;
-}
 
 export default function HojeScreen({ profile, onOpenProfile }: { profile: UserProfile; onOpenProfile: () => void }) {
   const navigation = useNavigation<{ navigate: (tab: string) => void }>();

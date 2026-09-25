@@ -18,9 +18,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { Exercise, WorkoutPlan, WorkoutCheckin } from '../types';
+import { Exercise, WorkoutPlan, WorkoutCheckin, ExerciseSessionHistory } from '../types';
 import { useWorkoutPlan } from '../hooks/useWorkoutPlan';
 import WorkoutSessionModal from '../components/WorkoutSessionModal';
+import WorkoutPlanView from '../components/WorkoutPlanView';
+import { pickTodayPlan } from '../utils/workout';
 import { storage, getToken, exerciseVideoUrl } from '../services/storage';
 import { errorMessage } from '../services/api';
 import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
@@ -170,80 +172,6 @@ function ExerciseEditorRow({
             <Text style={styles.videoAttachBtnText}>🖼 Galeria</Text>
           </TouchableOpacity>
           {uploadingVideo && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: spacing.xs }} />}
-        </View>
-      )}
-    </View>
-  );
-}
-
-function WorkoutCard({
-  plan,
-  checkin,
-  onCheckIn,
-  onEdit,
-  onDelete,
-  onViewVideo,
-  onStartSession,
-}: {
-  plan: WorkoutPlan;
-  checkin: WorkoutCheckin | null;
-  onCheckIn: (status: 'done' | 'skipped') => void;
-  onEdit: () => void;
-  onDelete: () => void;
-  onViewVideo: (videoId: string) => void;
-  onStartSession: () => void;
-}) {
-  const borderColor = checkin?.status === 'done' ? colors.success : checkin?.status === 'skipped' ? colors.textMuted : colors.primary;
-
-  return (
-    <View style={[styles.card, { borderLeftColor: borderColor }]}>
-      <View style={styles.cardTop}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cardName}>{plan.name}</Text>
-          {!!plan.dayLabel && <Text style={styles.cardDayLabel}>{plan.dayLabel}</Text>}
-        </View>
-        <View style={styles.cardActions}>
-          <TouchableOpacity onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Editar ${plan.name}`} hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}>
-            <Text style={styles.cardActionIcon}>✏️</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onDelete} accessibilityRole="button" accessibilityLabel={`Excluir ${plan.name}`} hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}>
-            <Text style={styles.cardActionIcon}>🗑️</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {plan.exercises.map((e) => (
-        <View key={e.id} style={styles.exerciseLine}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.exerciseLineName}>• {e.name}</Text>
-            {!!exerciseSummary(e) && <Text style={styles.exerciseLineDetail}>{exerciseSummary(e)}</Text>}
-          </View>
-          {e.videoId && (
-            <TouchableOpacity style={styles.playBtn} onPress={() => onViewVideo(e.videoId!)} accessibilityRole="button" accessibilityLabel={`Ver vídeo de ${e.name}`}>
-              <Text style={styles.playBtnText}>▶</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ))}
-
-      <TouchableOpacity style={styles.sessionBtn} onPress={onStartSession} accessibilityRole="button">
-        <Text style={styles.sessionBtnText}>{checkin?.status === 'done' ? 'Ver/editar séries de hoje' : 'Registrar séries e cargas'}</Text>
-      </TouchableOpacity>
-
-      {checkin ? (
-        <View style={styles.statusBadge}>
-          <Text style={styles.statusText}>
-            {checkin.status === 'done' ? '✅ Concluído' : '⏭️ Pulado'}
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.checkinRow}>
-          <TouchableOpacity style={styles.checkinBtn} onPress={() => onCheckIn('done')}>
-            <Text style={styles.checkinBtnText}>Concluí hoje ✅</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.skipBtn} onPress={() => onCheckIn('skipped')}>
-            <Text style={styles.skipBtnText}>Pular</Text>
-          </TouchableOpacity>
         </View>
       )}
     </View>
@@ -429,6 +357,29 @@ export default function TreinoScreen() {
   const [editingDraftIndex, setEditingDraftIndex] = useState<number | null>(null);
   const [viewingVideoId, setViewingVideoId] = useState<string | null>(null);
   const [sessionPlan, setSessionPlan] = useState<WorkoutPlan | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [history, setHistory] = useState<Record<string, ExerciseSessionHistory | undefined>>({});
+
+  useEffect(() => { getToken().then(setToken); }, []);
+
+  // Ficha aberta: a escolhida, ou a do dia (dia da semana / próxima não feita).
+  const doneToday = new Set(todayCheckins.filter((c) => c.status === 'done').map((c) => c.workoutPlanId));
+  const selectedPlan = plans.find((p) => p.id === selectedId) ?? pickTodayPlan(plans, doneToday);
+
+  // "Última vez" de cada exercício da ficha aberta.
+  const selectedKey = selectedPlan ? `${selectedPlan.id}:${selectedPlan.exercises.map((e) => e.name).join('|')}` : '';
+  useEffect(() => {
+    if (!selectedPlan) return;
+    let cancelled = false;
+    Promise.all(selectedPlan.exercises.map((e) => storage.getExerciseHistory(e.name, 1).then((h) => [e.name.toLowerCase(), h[0]] as const).catch(() => null)))
+      .then((entries) => {
+        if (cancelled) return;
+        setHistory((prev) => ({ ...prev, ...Object.fromEntries(entries.filter(Boolean) as [string, ExerciseSessionHistory | undefined][]) }));
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, sessionPlan]);
 
   const onRefresh = async () => { setRefreshing(true); await refresh(); setRefreshing(false); };
 
@@ -517,9 +468,14 @@ export default function TreinoScreen() {
     setImporting(true);
     try {
       for (const [i, file] of files.entries()) {
-        setImportProgress(files.length > 1 ? `Lendo ${i + 1} de ${files.length}: ${file.name}` : `Lendo ${file.name}`);
+        const prefix = files.length > 1 ? `${i + 1}/${files.length} · ` : '';
+        setImportProgress(`${prefix}Enviando ${file.name}…`);
         try {
-          const plans = await storage.extractWorkoutFromPdf(file.uri);
+          const plans = await storage.extractWorkoutFromPdf(file.uri, (fraction) => {
+            setImportProgress(fraction < 1
+              ? `${prefix}Enviando ${file.name}… ${Math.round(fraction * 100)}%`
+              : `${prefix}Lendo ${file.name}…`);
+          });
           // Nome do arquivo ("Treino B.pdf") quando a IA não achou um nome no PDF.
           const fileLabel = file.name.replace(/\.pdf$/i, '').trim();
           collected.push(...plans.map((p) => ({
@@ -576,7 +532,10 @@ export default function TreinoScreen() {
       id: `pdf_${Date.now().toString(36)}_${i}_${Math.random().toString(36).slice(2)}`,
       ...draft,
     }));
-    if (await saveOrAlert([...plans, ...newPlans])) setPdfDrafts(null);
+    if (await saveOrAlert([...plans, ...newPlans])) {
+      setPdfDrafts(null);
+      setSelectedId(newPlans[0]?.id ?? null);
+    }
   };
 
   return (
@@ -606,42 +565,43 @@ export default function TreinoScreen() {
           </Text>
         </View>
       )}
-      <FlatList
-        data={plans}
-        keyExtractor={(p) => p.id}
-        renderItem={({ item }) => (
-          <WorkoutCard
-            plan={item}
-            checkin={checkinFor(item.id, todayCheckins)}
-            onCheckIn={(status) => handleCheckIn(item.id, status)}
-            onEdit={() => openEdit(item)}
-            onDelete={() => handleDelete(item)}
-            onViewVideo={setViewingVideoId}
-            onStartSession={() => setSessionPlan(item)}
-          />
-        )}
+      <ScrollView
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          loadError ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>⚠️</Text>
-              <Text style={styles.emptyText}>Não foi possível carregar suas fichas</Text>
-              <Text style={styles.emptySubtext}>{loadError}</Text>
-              <TouchableOpacity style={styles.retryBtn} onPress={refresh} accessibilityRole="button">
-                <Text style={styles.retryBtnText}>Tentar de novo</Text>
-              </TouchableOpacity>
-            </View>
-          ) : !isLoading ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>🏋️</Text>
-              <Text style={styles.emptyText}>Nenhuma ficha de treino ainda</Text>
-              <Text style={styles.emptySubtext}>Toque em + para montar manualmente, ou envie os PDFs das suas fichas no botão acima (dá para escolher vários de uma vez, ex.: Treino A, B e C).</Text>
-            </View>
-          ) : null
-        }
-      />
+      >
+        {selectedPlan ? (
+          <WorkoutPlanView
+            plans={plans}
+            selected={selectedPlan}
+            onSelect={setSelectedId}
+            checkin={checkinFor(selectedPlan.id, todayCheckins)}
+            pending={pendingIds.includes(selectedPlan.id)}
+            token={token}
+            history={history}
+            onStart={() => setSessionPlan(selectedPlan)}
+            onCheckIn={(status) => handleCheckIn(selectedPlan.id, status)}
+            onEdit={() => openEdit(selectedPlan)}
+            onDelete={() => handleDelete(selectedPlan)}
+            onViewVideo={setViewingVideoId}
+          />
+        ) : loadError ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>⚠️</Text>
+            <Text style={styles.emptyText}>Não foi possível carregar suas fichas</Text>
+            <Text style={styles.emptySubtext}>{loadError}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={refresh} accessibilityRole="button">
+              <Text style={styles.retryBtnText}>Tentar de novo</Text>
+            </TouchableOpacity>
+          </View>
+        ) : !isLoading ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>🏋️</Text>
+            <Text style={styles.emptyText}>Nenhuma ficha de treino ainda</Text>
+            <Text style={styles.emptySubtext}>Toque em 📄 PDF e escolha os PDFs das suas fichas (dá para selecionar vários de uma vez, ex.: Treino A, B e C). Também dá para montar manualmente no +.</Text>
+          </View>
+        ) : null}
+      </ScrollView>
 
       <WorkoutSessionModal
         visible={!!sessionPlan}

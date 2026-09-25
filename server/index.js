@@ -76,6 +76,7 @@ app.use('/api/extracted-data', require('./routes/extracted'));
 app.use('/api', require('./routes/plans'));
 app.use('/api/workout-logs', require('./routes/workoutLogs'));
 app.use('/api', media);
+app.use('/api/uploads', require('./routes/uploads'));
 // Por último: o rate limit de IA vale para as rotas deste router.
 app.use('/api', require('./routes/ai'));
 

@@ -6,6 +6,9 @@ const ai = require('../ai/providers');
 const aiKeys = require('../lib/aiKeys');
 const { HttpError, text, arrayOf } = require('../lib/http');
 const { replaceMessageExtraction } = require('./extracted');
+const { consumeUpload } = require('./uploads');
+const { saveExerciseImage } = require('./media');
+const { extractWorkoutFromPdfLayout } = require('../ai/workoutPdf');
 
 const router = express.Router();
 
@@ -173,6 +176,54 @@ router.post('/extract-workout/file', async (req, res) => {
     ? await extractFromPdf(req, config, file.buffer, WORKOUT)
     : await withProvider(req, (c) => ai.extractWorkoutFromImage(c, file.buffer.toString('base64'), file.mimetype), () => config);
   res.json({ plans });
+});
+
+// Processa um PDF pesado por vez (renderizar uma ficha de 75 MB usa ~1 GB de
+// memória); os demais esperam na fila.
+let pdfQueue = Promise.resolve();
+function oneAtATime(fn) {
+  const run = pdfQueue.then(fn, fn);
+  pdfQueue = run.catch(() => {});
+  return run;
+}
+
+// Limite para mandar o PDF inteiro ao modelo (PDF escaneado).
+const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+
+// Ficha enviada em partes (/api/uploads). Tenta primeiro ler pelo layout
+// (fichas de apps de personal: texto + foto por exercício), sem IA e sem
+// custo, guardando a foto de cada exercício. Se o formato não for
+// reconhecido, cai na extração por IA (texto; ou o PDF inteiro se escaneado).
+router.post('/extract-workout/upload/:id', async (req, res) => {
+  const { buffer } = await consumeUpload(req, req.params.id);
+  const layout = await oneAtATime(() => extractWorkoutFromPdfLayout(buffer).catch((e) => {
+    console.error('[pdf-layout] falhou:', e.message);
+    return null;
+  }));
+
+  if (layout) {
+    const exercises = [];
+    for (const { photo, ...exercise } of layout.plan.exercises) {
+      exercises.push({ ...exercise, imageId: photo ? await saveExerciseImage(req.userId, photo) : undefined });
+    }
+    return res.json({ plans: [{ ...layout.plan, routine: layout.routine, exercises, source: 'pdf' }], method: 'layout' });
+  }
+
+  const config = await aiKeys.resolveAiConfig(req);
+  const content = await pdfText(buffer);
+  if (content === null) throw new HttpError(422, 'Não conseguimos ler esse arquivo. Confira se é um PDF válido.');
+  if (content.trim().length < 30 && buffer.length > MAX_DOCUMENT_BYTES) {
+    throw new HttpError(413, 'Este PDF é escaneado e grande demais para a IA ler (máx. 25 MB). Tente exportá-lo com menos páginas ou em qualidade menor.');
+  }
+  const plans = await extractFromPdf(req, config, buffer, WORKOUT);
+  res.json({ plans, method: 'ai' });
+});
+
+router.post('/extract-meals/upload/:id', async (req, res) => {
+  const config = await aiKeys.resolveAiConfig(req);
+  const { buffer } = await consumeUpload(req, req.params.id);
+  const meals = await extractFromPdf(req, config, buffer, MEALS);
+  res.json({ meals });
 });
 
 router.post('/transcribe', async (req, res) => {

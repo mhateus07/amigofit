@@ -113,14 +113,19 @@ router.delete('/account', authLimiter, requireAuth, async (req, res) => {
   const files = await withTransaction(async (db) => {
     const videos = await db.query('SELECT filename FROM exercise_videos WHERE user_id=$1', [req.userId]);
     const images = await db.query('SELECT filename FROM chat_images WHERE user_id=$1', [req.userId]);
+    const exerciseImages = await db.query('SELECT filename FROM exercise_images WHERE user_id=$1', [req.userId]);
     for (const table of [
       'meal_checkins', 'workout_checkins', 'workout_set_logs', 'extracted_data', 'messages', 'meals',
-      'workout_plans', 'exercise_videos', 'chat_images', 'ai_keys', 'profiles',
+      'workout_plans', 'exercise_videos', 'exercise_images', 'chat_images', 'ai_keys', 'profiles',
     ]) {
       await db.query(`DELETE FROM ${table} WHERE user_id=$1`, [req.userId]);
     }
     await db.query('DELETE FROM users WHERE id=$1', [req.userId]);
-    return { videos: videos.rows.map((r) => r.filename), images: images.rows.map((r) => r.filename) };
+    return {
+      videos: videos.rows.map((r) => r.filename),
+      images: images.rows.map((r) => r.filename),
+      exerciseImages: exerciseImages.rows.map((r) => r.filename),
+    };
   });
   media.removeFiles(files);
   res.json({ ok: true });

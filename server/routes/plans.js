@@ -37,6 +37,7 @@ function validateExercise(e) {
     restSeconds: num(e.restSeconds, 'restSeconds'),
     notes: text(e.notes, 'notes', { max: 500, optional: true }) || undefined,
     videoId: text(e.videoId, 'videoId', { max: 100, optional: true }) || undefined,
+    imageId: text(e.imageId, 'imageId', { max: 100, optional: true }) || undefined,
   };
 }
 
@@ -46,6 +47,7 @@ function validatePlan(p) {
     id: p.id === undefined ? undefined : text(p.id, 'id', { max: 100 }),
     name: text(p.name, 'name', { max: 100 }),
     dayLabel: text(p.dayLabel, 'dayLabel', { max: 50, optional: true }),
+    routine: text(p.routine, 'routine', { max: 100, optional: true }),
     exercises: arrayOf(p.exercises ?? [], 'exercises', { max: 60 }).map(validateExercise),
     source: oneOf(p.source, 'source', ['pdf', 'photo', 'manual'], { optional: true, fallback: 'manual' }),
   };
@@ -148,7 +150,7 @@ router.post('/meal-plan/checkins', async (req, res) => {
 // ── Fichas de treino ──────────────────────────────────────
 router.get('/workout-plans', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, name, day_label as "dayLabel", exercises, source FROM workout_plans WHERE user_id=$1 AND active=true ORDER BY sort_order ASC',
+    'SELECT id, name, day_label as "dayLabel", routine, exercises, source FROM workout_plans WHERE user_id=$1 AND active=true ORDER BY sort_order ASC',
     [req.userId]
   );
   res.json({ plans: rows });
@@ -163,13 +165,13 @@ router.post('/workout-plans', async (req, res) => {
     for (const [i, p] of plans.entries()) {
       const id = p.id || newId('wp_');
       const { rowCount } = await db.query(
-        `INSERT INTO workout_plans (id, user_id, name, day_label, exercises, source, sort_order, active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,true)
+        `INSERT INTO workout_plans (id, user_id, name, day_label, routine, exercises, source, sort_order, active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)
          ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name, day_label = EXCLUDED.day_label, exercises = EXCLUDED.exercises,
-           source = EXCLUDED.source, sort_order = EXCLUDED.sort_order, active = true
+           name = EXCLUDED.name, day_label = EXCLUDED.day_label, routine = EXCLUDED.routine,
+           exercises = EXCLUDED.exercises, source = EXCLUDED.source, sort_order = EXCLUDED.sort_order, active = true
          WHERE workout_plans.user_id = EXCLUDED.user_id`,
-        [id, req.userId, p.name, p.dayLabel, JSON.stringify(p.exercises), p.source, i]
+        [id, req.userId, p.name, p.dayLabel, p.routine, JSON.stringify(p.exercises), p.source, i]
       );
       if (rowCount === 0) throw new HttpError(409, 'Conflito de identificador de ficha');
       ids.push(id);

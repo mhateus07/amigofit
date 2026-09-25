@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, Modal, ScrollView, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { format, parseISO } from 'date-fns';
 import { Exercise, ExerciseSessionHistory, LoggedSet, WorkoutPlan } from '../types';
-import { storage } from '../services/storage';
+import { storage, exerciseImageUrl, getToken } from '../services/storage';
+import { techniquesOf, formatRest } from '../utils/workout';
 import { errorMessage } from '../services/api';
 import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
 
@@ -81,6 +82,8 @@ export default function WorkoutSessionModal({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [rest, setRest] = useState<number | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  useEffect(() => { getToken().then(setToken); }, []);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopRest = () => {
@@ -234,12 +237,29 @@ export default function WorkoutSessionModal({
                       onPress={() => setExpanded(expanded === key ? null : key)}
                       accessibilityRole="button"
                       accessibilityHint="Mostra a evolução de carga deste exercício"
+                      style={styles.exerciseHeader}
                     >
+                      {!!e.imageId && token && (
+                        <Image
+                          source={{ uri: exerciseImageUrl(e.imageId), headers: { Authorization: `Bearer ${token}` } }}
+                          style={styles.thumb}
+                          resizeMode="cover"
+                        />
+                      )}
+                      <View style={{ flex: 1 }}>
                       <Text style={styles.exerciseName}>{e.name}</Text>
+                      <Text style={styles.planned}>
+                        Planejado: {[e.sets ? `${e.sets} × ${e.reps ?? '—'}` : e.reps, e.load, formatRest(e.restSeconds) && `descanso ${formatRest(e.restSeconds)}`].filter(Boolean).join(' · ')}
+                      </Text>
+                      {techniquesOf(e).length > 0 && (
+                        <Text style={styles.techniques}>{techniquesOf(e).map((t) => t.label).join(' · ')}{e.notes ? ` — ${e.notes}` : ''}</Text>
+                      )}
+                      {!techniquesOf(e).length && !!e.notes && <Text style={styles.techniques}>{e.notes}</Text>}
                       <HistoryLine history={exerciseHistory} />
                       {exerciseHistory.length > 1 && (
                         <Text style={styles.evolutionToggle}>{expanded === key ? 'Ocultar evolução' : 'Ver evolução 📈'}</Text>
                       )}
+                      </View>
                     </TouchableOpacity>
                     {expanded === key && <EvolutionList history={exerciseHistory} />}
 
@@ -308,6 +328,10 @@ const styles = StyleSheet.create({
   restSkipText: { color: '#fff', fontFamily: fontFamily.medium },
   list: { padding: spacing.md, paddingBottom: 80 },
   exercise: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
+  exerciseHeader: { flexDirection: 'row', gap: spacing.sm },
+  thumb: { width: 56, height: 100, borderRadius: radius.md, backgroundColor: colors.background },
+  planned: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
+  techniques: { color: '#7C3AED', fontSize: fontSize.xs, fontFamily: fontFamily.medium, marginTop: 2 },
   exerciseName: { color: colors.text, fontSize: fontSize.md, fontFamily: fontFamily.semiBold },
   historyText: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
   evolutionToggle: { color: colors.primary, fontSize: fontSize.sm, marginTop: 4, fontFamily: fontFamily.medium },

@@ -53,3 +53,6 @@ server/.env
 
 # Arquivos enviados (vídeos/imagens) em desenvolvimento local
 uploads/
+
+# PDFs pessoais de treino (dados do usuário)
+treinos-pdf/

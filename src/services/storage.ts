@@ -179,35 +179,42 @@ async function getCheckins(date: string): Promise<MealCheckin[]> {
 async function checkInMeal(mealId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
   await apiRequest('/api/meal-plan/checkins', { method: 'POST', body: { mealId, date, status } });
 }
-// Envia um arquivo (PDF/foto) como multipart para uma rota de extração por
-// IA. Antes o PDF ia em base64 dentro do JSON (+33% de tamanho) e PDFs
-// escaneados grandes estouravam o limite do servidor.
-async function uploadForExtraction<T>(path: string, fileUri: string, mimeType: string): Promise<T> {
-  const token = await getToken();
-  let res: FileSystem.FileSystemUploadResult;
-  try {
-    res = await FileSystem.uploadAsync(`${API_BASE}${path}`, fileUri, {
-      httpMethod: 'POST',
-      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-      fieldName: 'file',
-      mimeType,
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+// PDF grande (fichas de apps de personal chegam a 75 MB): envia em partes
+// de 2 MB — o proxy do servidor corta requisições que levam mais de 60s.
+// onProgress recebe de 0 a 1.
+const CHUNK_BYTES = 2 * 1024 * 1024;
+
+export type UploadProgress = (fraction: number) => void;
+
+async function uploadPdfInChunks(fileUri: string, onProgress?: UploadProgress): Promise<string> {
+  const info = await FileSystem.getInfoAsync(fileUri);
+  if (!info.exists || !info.size) throw new ApiError(400, 'Não foi possível abrir o arquivo.');
+  const size = info.size;
+  const { id } = await apiRequest<{ id: string }>('/api/uploads', { method: 'POST', body: { size, mimeType: 'application/pdf' } });
+  const total = Math.ceil(size / CHUNK_BYTES);
+  for (let index = 0; index < total; index++) {
+    const data = await FileSystem.readAsStringAsync(fileUri, {
+      encoding: FileSystem.EncodingType.Base64,
+      position: index * CHUNK_BYTES,
+      length: Math.min(CHUNK_BYTES, size - index * CHUNK_BYTES),
     });
-  } catch {
-    throw new ApiError(0, 'Falha de conexão ao enviar o arquivo. Mantenha o app aberto durante o envio e tente novamente.');
+    // Até 3 tentativas por parte (rede do celular oscila); repetir é seguro.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await apiRequest(`/api/uploads/${id}/chunks/${index}`, { method: 'PUT', body: { data }, timeoutMs: 55_000 });
+        break;
+      } catch (e) {
+        if (attempt >= 3 || !(e instanceof ApiError) || e.status !== 0) throw e;
+      }
+    }
+    onProgress?.((index + 1) / total);
   }
-  let data: T & { error?: string } = {} as T & { error?: string };
-  try { data = JSON.parse(res.body || '{}'); } catch { /* corpo não-JSON (ex.: proxy) */ }
-  if (res.status < 200 || res.status >= 300) {
-    throw new ApiError(res.status, data.error || (res.status === 413
-      ? 'Arquivo grande demais (máx. 30 MB).'
-      : `Erro ${res.status} ao processar o arquivo.`));
-  }
-  return data;
+  return id;
 }
 
-async function extractMealsFromPdf(fileUri: string): Promise<Omit<Meal, 'id'>[]> {
-  const { meals } = await uploadForExtraction<{ meals: Omit<Meal, 'id'>[] }>('/api/extract-meals/file', fileUri, 'application/pdf');
+async function extractMealsFromPdf(fileUri: string, onProgress?: UploadProgress): Promise<Omit<Meal, 'id'>[]> {
+  const id = await uploadPdfInChunks(fileUri, onProgress);
+  const { meals } = await apiRequest<{ meals: Omit<Meal, 'id'>[] }>(`/api/extract-meals/upload/${id}`, { method: 'POST', timeoutMs: AI_TIMEOUT_MS });
   return meals;
 }
 
@@ -226,8 +233,11 @@ async function getWorkoutCheckins(date: string): Promise<WorkoutCheckin[]> {
 async function checkInWorkout(workoutPlanId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
   await apiRequest('/api/workout-plans/checkins', { method: 'POST', body: { workoutPlanId, date, status } });
 }
-async function extractWorkoutFromPdf(fileUri: string): Promise<Omit<WorkoutPlan, 'id'>[]> {
-  const { plans } = await uploadForExtraction<{ plans: Omit<WorkoutPlan, 'id'>[] }>('/api/extract-workout/file', fileUri, 'application/pdf');
+// Fichas no formato de apps de personal são lidas sem IA, com a foto de
+// cada exercício; outros formatos caem na leitura por IA.
+async function extractWorkoutFromPdf(fileUri: string, onProgress?: UploadProgress): Promise<Omit<WorkoutPlan, 'id'>[]> {
+  const id = await uploadPdfInChunks(fileUri, onProgress);
+  const { plans } = await apiRequest<{ plans: Omit<WorkoutPlan, 'id'>[] }>(`/api/extract-workout/upload/${id}`, { method: 'POST', timeoutMs: AI_TIMEOUT_MS });
   return plans;
 }
 async function extractWorkoutFromImage(imageBase64: string, mimeType: string): Promise<Omit<WorkoutPlan, 'id'>[]> {
@@ -279,6 +289,9 @@ async function uploadExerciseVideo(fileUri: string, mimeType: string): Promise<s
 }
 async function deleteExerciseVideo(id: string): Promise<void> {
   await apiRequest(`/api/exercise-videos/${id}`, { method: 'DELETE' });
+}
+export function exerciseImageUrl(id: string): string {
+  return `${API_BASE}/api/exercise-images/${id}/file`;
 }
 export function exerciseVideoUrl(id: string): string {
   return `${API_BASE}/api/exercise-videos/${id}/file`;

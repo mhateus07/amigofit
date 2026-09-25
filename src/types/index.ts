@@ -81,12 +81,14 @@ export interface Exercise {
   restSeconds?: number;
   notes?: string;
   videoId?: string; // referencia exercise_videos.id
+  imageId?: string; // foto do exercício (recortada do PDF da ficha), exercise_images.id
 }
 
 export interface WorkoutPlan {
   id: string;
   name: string; // 'Treino A - Peito/Tríceps'
   dayLabel?: string;
+  routine?: string; // rotina do personal, ex.: 'Hipertrofia 02'
   exercises: Exercise[];
   source: 'pdf' | 'photo' | 'manual';
 }
