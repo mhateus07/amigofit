@@ -3,6 +3,7 @@ import { Message, UserProfile } from '../types';
 import { storage } from '../services/storage';
 import { AIService } from '../services/ai';
 import { errorMessage, isStaleSession } from '../services/api';
+import { isOfflineError, readCache, writeCache } from '../services/offline';
 
 const uuidv4 = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
@@ -30,6 +31,7 @@ export function useChat(profile: UserProfile | null) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [offline, setOffline] = useState(false);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
 
@@ -63,6 +65,8 @@ export function useChat(profile: UserProfile | null) {
     setLoadError(null);
     try {
       const page = await storage.getMessages({ limit: PAGE_SIZE });
+      setOffline(false);
+      writeCache('chat', page.messages.slice(-50));
       setHasMore(page.hasMore);
       if (page.messages.length > 0) {
         setMessages(page.messages);
@@ -74,6 +78,15 @@ export function useChat(profile: UserProfile | null) {
       setLoadState('ready');
     } catch (e) {
       if (isStaleSession(e)) return;
+      // Sem internet: mostra as últimas mensagens salvas no aparelho.
+      const cached = isOfflineError(e) ? await readCache<Message[]>('chat') : null;
+      if (cached && cached.length) {
+        setMessages(cached);
+        setHasMore(false);
+        setOffline(true);
+        setLoadState('ready');
+        return;
+      }
       setLoadError(errorMessage(e));
       setLoadState('error');
     }
@@ -198,7 +211,7 @@ export function useChat(profile: UserProfile | null) {
 
   return {
     messages, isLoading, sendMessage, clearHistory, discardExtraction,
-    loadState, loadError, reload: load,
+    loadState, loadError, reload: load, offline,
     hasMore, loadingMore, loadMore, retrySave,
   };
 }

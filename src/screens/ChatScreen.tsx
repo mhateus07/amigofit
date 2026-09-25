@@ -180,7 +180,7 @@ function formatDuration(ms: number): string {
 export default function ChatScreen({ profile }: Props) {
   const {
     messages, isLoading, sendMessage, clearHistory,
-    loadState, loadError, reload, hasMore, loadingMore, loadMore, retrySave, discardExtraction,
+    loadState, loadError, reload, hasMore, loadingMore, loadMore, retrySave, discardExtraction, offline,
   } = useChat(profile);
   const [inputText, setInputText] = useState('');
   const [token, setToken] = useState<string | null>(null);
@@ -298,6 +298,11 @@ export default function ChatScreen({ profile }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
+        {offline && (
+          <TouchableOpacity style={styles.offlineBanner} onPress={reload} accessibilityRole="button">
+            <Text style={styles.offlineBannerText}>Sem conexão — mostrando as últimas mensagens salvas. Tocar para atualizar.</Text>
+          </TouchableOpacity>
+        )}
         {loadState === 'loading' && (
           <View style={styles.centerState}>
             <ActivityIndicator color={colors.primary} />
@@ -499,6 +504,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     alignSelf: 'flex-start',
   },
+  offlineBanner: { marginHorizontal: spacing.md, marginTop: spacing.sm, padding: spacing.sm, borderRadius: radius.md, backgroundColor: '#FFF4E5' },
+  offlineBannerText: { color: '#8A5300', fontSize: fontSize.sm },
   saveFailed: { marginTop: 6 },
   saveFailedText: { color: colors.error, fontSize: fontSize.xs, fontFamily: fontFamily.medium },
   centerState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg, gap: spacing.sm },

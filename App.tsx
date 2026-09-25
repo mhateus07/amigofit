@@ -32,6 +32,7 @@ import { UserProfile } from './src/types';
 import { storage, getToken, getStoredUser, startSession, endSession, migrateLocalAiKeys, AuthUser } from './src/services/storage';
 import { onUnauthorized, errorMessage, isStaleSession } from './src/services/api';
 import { cancelWorkoutReminder } from './src/services/reminders';
+import { isOfflineError, readCache, writeCache } from './src/services/offline';
 import { colors, fontSize, fontFamily } from './src/constants/theme';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -184,10 +185,23 @@ export default function App() {
       migrateLocalAiKeys().catch((e) => console.warn('Migração de chaves de IA:', e));
     } catch (e) {
       if (isStaleSession(e)) return;
+      // Sem internet ao abrir o app: entra com a última cópia do perfil salva
+      // no aparelho — Hoje, Dieta e Treino funcionam com os dados em cache.
+      const cached = isOfflineError(e) ? await readCache<UserProfile>('profile') : null;
+      if (cached) {
+        setProfile(cached);
+        setProfileState('ready');
+        return;
+      }
       setProfileError(errorMessage(e));
       setProfileState('error');
     }
   }, []);
+
+  // Mantém a cópia local do perfil atualizada (usada para abrir offline).
+  useEffect(() => {
+    if (authUser && profile) writeCache('profile', profile);
+  }, [authUser, profile]);
 
   const handleLogout = useCallback(async () => {
     await endSession();

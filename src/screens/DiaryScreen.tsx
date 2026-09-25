@@ -21,6 +21,7 @@ import { ptBR } from 'date-fns/locale';
 import { ExtractedData, ExtractedSource } from '../types';
 import { storage } from '../services/storage';
 import { errorMessage, isStaleSession } from '../services/api';
+import { isOfflineError, readCache, writeCache } from '../services/offline';
 import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
 import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../constants/categories';
 
@@ -255,15 +256,28 @@ export default function DiaryScreen() {
   const [editing, setEditing] = useState<ExtractedData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [offline, setOffline] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const data = await storage.getExtractedData();
       // Ignora categorias desconhecidas em vez de quebrar a tela.
-      setAllData(data.filter((d) => CATEGORY_CONFIG[d.category]).sort((a, b) => b.timestamp - a.timestamp));
+      const known = data.filter((d) => CATEGORY_CONFIG[d.category]).sort((a, b) => b.timestamp - a.timestamp);
+      setAllData(known);
       setLoadError(null);
+      setOffline(false);
+      writeCache('diary', known.slice(0, 300));
     } catch (e) {
-      if (!isStaleSession(e)) setLoadError(errorMessage(e));
+      if (isStaleSession(e)) return;
+      // Sem internet: mostra a última versão salva no aparelho.
+      const cached = isOfflineError(e) ? await readCache<ExtractedData[]>('diary') : null;
+      if (cached) {
+        setAllData(cached);
+        setOffline(true);
+        setLoadError(null);
+      } else {
+        setLoadError(errorMessage(e));
+      }
     } finally {
       setLoaded(true);
     }
@@ -347,7 +361,7 @@ export default function DiaryScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Diário</Text>
-          <Text style={styles.subtitle}>{allData.length} registros totais</Text>
+          <Text style={styles.subtitle}>{offline ? 'Sem conexão — última versão salva' : `${allData.length} registros totais`}</Text>
         </View>
       </View>
 

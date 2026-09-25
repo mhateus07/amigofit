@@ -4,6 +4,7 @@ import { storage } from '../../services/storage';
 import { AIService } from '../../services/ai';
 import { ApiError } from '../../services/api';
 import { UserProfile } from '../../types';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 jest.mock('../../services/storage');
 jest.mock('../../services/ai');
@@ -27,8 +28,9 @@ const profile: UserProfile = {
 };
 
 describe('useChat', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
+    await AsyncStorage.clear();
     mockedStorage.getMessages.mockResolvedValue({ messages: [], hasMore: false });
     mockedStorage.saveMessage.mockResolvedValue(undefined);
     mockedStorage.clearMessages.mockResolvedValue(undefined);
@@ -68,6 +70,18 @@ describe('useChat', () => {
     expect(result.current.loadError).toContain('Sem conexão');
     expect(result.current.messages).toHaveLength(0);
     expect(mockedStorage.saveMessage).not.toHaveBeenCalled();
+  });
+
+  it('sem internet, mostra as últimas mensagens salvas no aparelho', async () => {
+    mockedStorage.getMessages.mockResolvedValueOnce({ messages: [{ id: 'c1', role: 'user', content: 'oi offline', timestamp: 1 }], hasMore: false });
+    const first = await renderHook(() => useChat(profile));
+    await waitFor(() => expect(first.result.current.loadState).toBe('ready'));
+
+    mockedStorage.getMessages.mockRejectedValue(new ApiError(0, 'Sem conexão com o servidor.'));
+    const { result } = await renderHook(() => useChat(profile));
+    await waitFor(() => expect(result.current.offline).toBe(true));
+    expect(result.current.loadState).toBe('ready');
+    expect(result.current.messages[0].content).toBe('oi offline');
   });
 
   it('avisa quando não há chave de API configurada', async () => {
