@@ -263,7 +263,7 @@ Branch `fase-7-confiabilidade` (7 commits). Origem: análise de código de 2026-
 - Novas rotas: `PUT/DELETE /api/messages`, `PATCH/DELETE /api/extracted-data/:id`, `GET/PUT/DELETE /api/ai-keys/:provider`, `POST/GET /api/chat-images`, `GET/PUT /api/workout-logs`, `GET /api/workout-logs/history`, `POST /auth/password`, `POST /auth/logout-all`, `DELETE /auth/account`.
 - Nova variável obrigatória em produção: `AI_KEYS_SECRET` (mín. 32 caracteres; `openssl rand -base64 48`). O `deploy.sh` se recusa a rodar sem ela.
 
-**Testes**: 138 (40 contra PostgreSQL 16 real via `server/testing/realDb.js`, incluindo a migração de um banco no formato atual de produção). Rodar: `npm test`.
+**Testes**: 128 (31 contra PostgreSQL 16 real via `server/testing/realDb.js`, incluindo a migração de um banco no formato atual de produção). Rodar: `npm test`.
 
 **Checagem de produção (somente leitura, 2026-09-25)**: FKs com os nomes esperados, 0 check-ins cruzados, 0 `source_ref` duplicado, 0 horário inválido, 0 categoria desconhecida, 1 perfil com chave em texto puro (será migrado no primeiro start com `AI_KEYS_SECRET`). 5 refeições e 0 check-ins.
 

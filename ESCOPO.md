@@ -124,7 +124,7 @@ Como fazer, passo a passo:
 Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos gotchas do zero.
 
 ### 🟨 Fase 7 — Confiabilidade e proteção dos dados — implementada 2026-09-25, falta deploy e validação no iPhone
-Origem: análise do código colada pelo usuário em 2026-09-24 (achados de perda de histórico, isolamento entre contas e falhas silenciosas). Prioridade acima das Fases 3/4/5, que ficam pausadas até fechar esta. Branch `fase-7-confiabilidade`. Código pronto, **138 testes passando (40 contra PostgreSQL 16 real)**, TypeScript sem erros, bundle iOS compilando — mas **ainda não deployado nem testado no iPhone**.
+Origem: análise do código colada pelo usuário em 2026-09-24 (achados de perda de histórico, isolamento entre contas e falhas silenciosas). Prioridade acima das Fases 3/4/5, que ficam pausadas até fechar esta. Branch `fase-7-confiabilidade`. Código pronto, **128 testes passando (31 contra PostgreSQL 16 real)**, TypeScript sem erros, bundle iOS compilando — mas **ainda não deployado nem testado no iPhone**.
 
 Correções prioritárias (na ordem de gravidade):
 - [x] Editar dieta/treino não apaga mais os check-ins: planos são atualizados e arquivados (`active=false`) em vez de apagados; FK sem cascade. *(Produção tinha 5 refeições e 0 check-ins em 2026-09-25 — coerente com o bug ter apagado o histórico.)*
