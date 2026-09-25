@@ -425,6 +425,7 @@ export default function TreinoScreen() {
   const [formVisible, setFormVisible] = useState(false);
   const [editingPlan, setEditingPlan] = useState<WorkoutPlan | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<string | null>(null);
   const [pdfDrafts, setPdfDrafts] = useState<WorkoutDraft[] | null>(null);
   const [editingDraftIndex, setEditingDraftIndex] = useState<number | null>(null);
   const [viewingVideoId, setViewingVideoId] = useState<string | null>(null);
@@ -505,21 +506,45 @@ export default function TreinoScreen() {
     return true;
   };
 
+  // Aceita vários PDFs de uma vez (ex.: Treino A, B e C em arquivos
+  // separados): lê um por um e junta tudo numa única revisão.
   const handleUploadPdf = async () => {
-    const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf' });
-    if (result.canceled || !result.assets?.[0]) return;
+    const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', multiple: true });
+    if (result.canceled || !result.assets?.length) return;
 
+    const files = result.assets;
+    const collected: Omit<WorkoutPlan, 'id'>[] = [];
+    const failures: string[] = [];
     setImporting(true);
     try {
-      const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      applyExtractedDrafts(await storage.extractWorkoutFromPdf(base64));
-    } catch (e) {
-      Alert.alert('Não foi possível ler o arquivo', errorMessage(e, 'Não foi possível processar o arquivo. Tente novamente.'));
+      for (const [i, file] of files.entries()) {
+        setImportProgress(files.length > 1 ? `Lendo ${i + 1} de ${files.length}: ${file.name}` : `Lendo ${file.name}`);
+        try {
+          const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
+          const plans = await storage.extractWorkoutFromPdf(base64);
+          // Nome do arquivo ("Treino B.pdf") quando a IA não achou um nome no PDF.
+          const fileLabel = file.name.replace(/\.pdf$/i, '').trim();
+          collected.push(...plans.map((p) => ({
+            ...p,
+            name: !p.name || p.name === 'Treino' ? fileLabel : p.name,
+          })));
+          if (plans.length === 0) failures.push(`${file.name}: nenhum exercício encontrado`);
+        } catch (e) {
+          failures.push(`${file.name}: ${errorMessage(e, 'não foi possível ler')}`);
+        }
+      }
     } finally {
       setImporting(false);
+      setImportProgress(null);
     }
+
+    if (failures.length > 0) {
+      Alert.alert(
+        collected.length ? 'Alguns arquivos não foram lidos' : 'Não foi possível ler os arquivos',
+        failures.join('\n\n'),
+      );
+    }
+    if (collected.length > 0) applyExtractedDrafts(collected);
   };
 
   const handleUploadPhoto = async () => {
@@ -562,7 +587,7 @@ export default function TreinoScreen() {
         <View>
           <Text style={styles.title}>Treino</Text>
           <Text style={styles.subtitle}>
-            {plans.length === 0 ? 'Nenhuma ficha cadastrada' : `${doneCount} de ${plans.length} fichas hoje`}
+            {importProgress ?? (plans.length === 0 ? 'Nenhuma ficha cadastrada' : `${doneCount} de ${plans.length} fichas hoje`)}
           </Text>
         </View>
         <View style={styles.headerBtns}>
@@ -614,7 +639,7 @@ export default function TreinoScreen() {
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>🏋️</Text>
               <Text style={styles.emptyText}>Nenhuma ficha de treino ainda</Text>
-              <Text style={styles.emptySubtext}>Toque em + para montar manualmente, ou envie o PDF da sua ficha no botão acima.</Text>
+              <Text style={styles.emptySubtext}>Toque em + para montar manualmente, ou envie os PDFs das suas fichas no botão acima (dá para escolher vários de uma vez, ex.: Treino A, B e C).</Text>
             </View>
           ) : null
         }
