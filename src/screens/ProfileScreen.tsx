@@ -445,7 +445,7 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
   const activeProviderKey = aiKeys[provider];
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Perfil</Text>
 

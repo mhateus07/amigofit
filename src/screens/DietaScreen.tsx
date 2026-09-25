@@ -49,8 +49,12 @@ function MealCard({
       <View style={styles.cardTop}>
         <Text style={styles.cardTime}>{meal.time}</Text>
         <View style={styles.cardActions}>
-          <TouchableOpacity onPress={onEdit}><Text style={styles.cardActionIcon}>✏️</Text></TouchableOpacity>
-          <TouchableOpacity onPress={onDelete}><Text style={styles.cardActionIcon}>🗑️</Text></TouchableOpacity>
+          <TouchableOpacity onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Editar ${meal.name}`} hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}>
+            <Text style={styles.cardActionIcon}>✏️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onDelete} accessibilityRole="button" accessibilityLabel={`Excluir ${meal.name}`} hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}>
+            <Text style={styles.cardActionIcon}>🗑️</Text>
+          </TouchableOpacity>
         </View>
       </View>
       <Text style={styles.cardName}>{meal.name}</Text>

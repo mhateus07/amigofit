@@ -119,6 +119,7 @@ export type RootStackParamList = {
 };
 
 export type MainTabParamList = {
+  Hoje: undefined;
   Chat: undefined;
   Diary: undefined;
   Dieta: undefined;

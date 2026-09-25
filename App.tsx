@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createStackNavigator } from '@react-navigation/stack';
 import { Text, View, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -16,6 +17,7 @@ import {
 
 ExpoSplashScreen.preventAutoHideAsync();
 
+import HojeScreen from './src/screens/HojeScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import DiaryScreen from './src/screens/DiaryScreen';
 import DietaScreen from './src/screens/DietaScreen';
@@ -49,6 +51,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string |
 }
 
 const Tab = createBottomTabNavigator();
+const Stack = createStackNavigator();
 
 function TabIcon({ icon, focused }: { icon: string; focused: boolean }) {
   return <Text style={{ fontSize: focused ? 22 : 20, opacity: focused ? 1 : 0.5 }}>{icon}</Text>;
@@ -61,7 +64,37 @@ interface MainTabsProps {
   onLogout: () => void;
 }
 
-function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
+// Perfil saiu da barra de abas (máx. 6 abas com a nova "Hoje") e abre pelo
+// ⚙️ da tela Hoje, empilhado sobre as abas.
+function MainStack({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
+  return (
+    <Stack.Navigator>
+      <Stack.Screen name="Main" options={{ headerShown: false }}>
+        {() => <MainTabs profile={profile} />}
+      </Stack.Screen>
+      <Stack.Screen
+        name="Perfil"
+        options={{
+          title: '',
+          headerBackTitle: 'Voltar',
+          headerTitleStyle: { fontFamily: fontFamily.semiBold },
+          headerTintColor: colors.primary,
+        }}
+      >
+        {() => (
+          <ProfileScreen
+            profile={profile}
+            authUser={authUser}
+            onProfileUpdate={setProfile}
+            onLogout={onLogout}
+          />
+        )}
+      </Stack.Screen>
+    </Stack.Navigator>
+  );
+}
+
+function MainTabs({ profile }: { profile: UserProfile }) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -80,6 +113,12 @@ function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
         tabBarLabelStyle: { fontSize: fontSize.xs, fontFamily: fontFamily.semiBold },
       }}
     >
+      <Tab.Screen
+        name="Hoje"
+        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="☀️" focused={focused} /> }}
+      >
+        {({ navigation }) => <HojeScreen profile={profile} onOpenProfile={() => navigation.navigate('Perfil')} />}
+      </Tab.Screen>
       <Tab.Screen
         name="Chat"
         options={{ tabBarIcon: ({ focused }) => <TabIcon icon="💬" focused={focused} /> }}
@@ -106,19 +145,6 @@ function MainTabs({ profile, authUser, setProfile, onLogout }: MainTabsProps) {
         options={{ tabBarIcon: ({ focused }) => <TabIcon icon="📈" focused={focused} /> }}
         component={InsightsScreen}
       />
-      <Tab.Screen
-        name="Perfil"
-        options={{ tabBarIcon: ({ focused }) => <TabIcon icon="⚙️" focused={focused} /> }}
-      >
-        {() => (
-          <ProfileScreen
-            profile={profile}
-            authUser={authUser}
-            onProfileUpdate={setProfile}
-            onLogout={onLogout}
-          />
-        )}
-      </Tab.Screen>
     </Tab.Navigator>
   );
 }
@@ -312,7 +338,7 @@ export default function App() {
         <SafeAreaProvider>
           <NavigationContainer>
             <StatusBar style="dark" />
-            <MainTabs
+            <MainStack
               profile={profile!}
               authUser={authUser!}
               setProfile={setProfile}
