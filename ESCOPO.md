@@ -48,7 +48,7 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 - Frontend: React Native + Expo SDK 57 (TypeScript)
 - Backend: Node.js + Express (JavaScript)
 - Banco: PostgreSQL via Docker Compose
-- IA: Claude API (chat + extração de dados estruturados), com suporte multi-provider (OpenAI, Gemini, Groq) — BYOK, chave nunca armazenada no servidor
+- IA: Claude API (chat + extração de dados estruturados), com suporte multi-provider (OpenAI, Gemini, Groq) — BYOK; desde a Fase 7 a chave fica criptografada no servidor (AES-256-GCM), nunca em texto puro nem no aparelho
 - Auth: JWT + bcrypt
 
 ### O que já funciona
@@ -64,7 +64,7 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 1 | CORS aberto | `server/index.js` | ✅ Corrigido na Fase 0, deployado em produção em 2026-07-17 |
 | 2 | `JWT_SECRET` sem fallback seguro | `server/index.js` | ✅ Corrigido na Fase 0, deployado em produção em 2026-07-17 |
 | 3 | Sem rate limit em `/api/chat` e `/api/extract` | `server/index.js` | ✅ Corrigido na Fase 0, deployado em produção em 2026-07-17 |
-| 4 | DELETE + reinsert de mensagens | `server/index.js` | ✅ Corrigido na Fase 1 (upsert) |
+| 4 | DELETE + reinsert de mensagens | `server/index.js` | ✅ Corrigido na Fase 1 (upsert); o `DELETE ... NOT IN` que sobrou foi removido na Fase 7 |
 | 5 | URL de backend hardcoded | `src/services/storage.ts` | ✅ Corrigido na Fase 0 (`.env`) |
 | 6 | Documentos de planejamento conflitantes | raiz do repo | Em resolução — este arquivo centraliza |
 | 7 | Dependências mortas | `package.json` | ✅ Corrigido na Fase 0 |
@@ -72,7 +72,7 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 9 | Zero testes automatizados | todo o repo | Em andamento (Fase 2) |
 | 10 | Insights são heurísticas, não IA real | `InsightsScreen.tsx` | Pendente (Fase 3) |
 | 11 | Chat sem streaming | `ai.ts` / backend | Pendente, não bloqueante |
-| 12 | Logs do backend não registram status HTTP | `server/index.js` | Pendente, achado na Fase 1 |
+| 12 | Logs do backend não registram status HTTP | `server/index.js` | ✅ Corrigido na Fase 7 (log de acesso com status e latência) — falta deploy |
 | 13 | `expo-file-system` com API removida — "compartilhar relatório semanal" quebrado | `InsightsScreen.tsx` | Pendente (Fase 3) |
 | 14 | Backend em HTTP puro, sem TLS (chaves de API de IA trafegando sem criptografia) | VPS de produção | ✅ Corrigido em 2026-07-17 — HTTPS via Traefik/EasyPanel + Let's Encrypt (`amigofit-api.impulsiodigital.com`), porta 3001 HTTP fechada |
 | 15 | Deploy manual multi-passo via SSH, sem script | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/deploy.sh` |
@@ -85,6 +85,11 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 22 | Splash nativa aparece pequena/centralizada em vez de tela cheia, desde a migração pro plugin `expo-splash-screen` (SDK 57) | `app.json` (config do plugin `expo-splash-screen`) | Pendente — cosmético, não bloqueia uso; app abre e funciona normal |
 | 23 | `Simulator.app` ausente/quebrado na instalação do Xcode do usuário — bloqueia teste via simulador (só o teste em iPhone físico funciona hoje) | Xcode.app local (fora do repo) | Pendente — precisa reinstalar/reparar o Xcode; ver decisão 2026-09-15 |
 
+| 24 | Salvar plano de dieta/treino apagava todo o histórico de check-ins (DELETE + ON DELETE CASCADE) | `server/routes/plans.js` | ✅ Corrigido na Fase 7 — falta deploy |
+| 25 | Mensagens/check-ins aceitavam IDs de outra conta | `server/routes/*` | ✅ Corrigido na Fase 7 — falta deploy |
+| 26 | Falhas de gravação escondidas no app (sem `res.ok`, `catch {}`) | `src/services/storage.ts` | ✅ Corrigido na Fase 7 — falta build no iPhone |
+| 27 | Chaves de IA em texto puro dentro de `profiles.data` (e nos backups) — contradizia "chave nunca armazenada no servidor" | `server/index.js` | ✅ Corrigido na Fase 7 (criptografadas em `ai_keys`) — falta deploy com `AI_KEYS_SECRET` |
+| 28 | Backup só existe na própria VPS | `scripts/backup-db.sh` | Pendente — script pronto, falta escolher destino externo (rclone) |
 ---
 
 ## 3. Fases
@@ -117,6 +122,54 @@ Como fazer, passo a passo:
 - Teste de `WelcomeScreen` ainda imprime um aviso benigno `overlapping act() calls` no console (por causa das animações do `useEffect`) — não falha o teste, mas ficou como possível limpeza futura, não bloqueante.
 
 Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos gotchas do zero.
+
+### 🟨 Fase 7 — Confiabilidade e proteção dos dados — implementada 2026-09-25, falta deploy e validação no iPhone
+Origem: análise do código colada pelo usuário em 2026-09-24 (achados de perda de histórico, isolamento entre contas e falhas silenciosas). Prioridade acima das Fases 3/4/5, que ficam pausadas até fechar esta. Branch `fase-7-confiabilidade`. Código pronto, **138 testes passando (40 contra PostgreSQL 16 real)**, TypeScript sem erros, bundle iOS compilando — mas **ainda não deployado nem testado no iPhone**.
+
+Correções prioritárias (na ordem de gravidade):
+- [x] Editar dieta/treino não apaga mais os check-ins: planos são atualizados e arquivados (`active=false`) em vez de apagados; FK sem cascade. *(Produção tinha 5 refeições e 0 check-ins em 2026-09-25 — coerente com o bug ter apagado o histórico.)*
+- [x] Isolamento entre contas: check-in confere o dono (404) + FK composta `(id, user_id)` no banco; upsert de mensagem/plano só altera linha da própria conta (409)
+- [x] Falhas de gravação visíveis: `src/services/api.ts` (timeout, `res.ok`, erro legível), telas com "Tentar de novo", otimismo desfeito em erro, mensagem de chat não salva marcada com retry
+- [x] Troca de conta: logout limpa token/usuário/caches/marcadores; dados locais separados por usuário; respostas de sessão anterior descartadas; cache de insights por assinatura dos dados
+- [x] Chaves de IA: fora do aparelho e do JSON do perfil → tabela `ai_keys` com AES-256-GCM (`AI_KEYS_SECRET`), servidor usa a chave direto, API só devolve os 4 últimos dígitos (ver decisão 2026-09-25)
+- [x] Chat grava mensagem por mensagem (PUT idempotente); limpar histórico = `DELETE /api/messages`
+
+Outros bugs da análise:
+- [x] Imagens chegam ao OpenAI/Gemini (antes viravam "[imagem]"); Groq recusa explicitamente
+- [x] Imagem do chat persistida no servidor (`chat_images`), aparece após recarregar
+- [x] Inicialização separa "sem perfil" (onboarding) de "não carregou" (erro + retry)
+- [x] Sincronização Apple Saúde/Health Connect: marcador só avança após o servidor confirmar; `sourceRef` evita duplicar; totais do dia recalculados inteiros
+- [x] Contexto da IA usa os 6 registros mais recentes por categoria (antes: os mais antigos)
+- [x] Reprocessamento por ID da mensagem (`messages.extracted_at`), não por horário
+- [x] Diário e Insights recarregam ao ganhar foco
+- [x] Validação de tipos/enums/datas/tamanhos na API e das respostas da IA
+- [x] TypeScript compilando de novo (tipos do Jest no TS 6, `absoluteFill`)
+
+Melhorias técnicas:
+- [x] Backend dividido em módulos (`server/lib`, `server/routes`, `server/ai`)
+- [x] Migrações versionadas (`server/migrations.js`, tabela `schema_migrations`) + índices por usuário/data
+- [x] Paginação do chat (100 por vez, "carregar anteriores")
+- [x] Timeout em todas as chamadas (app e provedores de IA)
+- [x] Sessões: JWT de 30 dias com renovação automática + revogação (`token_version`)
+- [x] Cotas de vídeo (1 GB) e imagem (300 MB) por usuário + limpeza diária de órfãos
+- [x] Backup inclui vídeos/imagens; cópia externa via rclone (`BACKUP_REMOTE`); `scripts/test-restore.sh`
+- [x] Deploy confere `/health` (com banco) e faz backup antes; resolve risco #12 (log com status e latência, sem conteúdo)
+- [x] Testes com PostgreSQL real (`server/testing/realDb.js`, `server/__tests__/integridade.pg.test.js`)
+
+Melhorias de produto:
+- [x] Tela "Hoje" (primeira aba; Perfil abre pelo ⚙️)
+- [x] Treino com registro de séries (carga/reps), cronômetro de descanso e evolução por exercício
+- [x] Diário editável (corrigir/excluir) mostrando a origem de cada registro
+- [x] IA com revisão: "Identifiquei N registros · revisar" com opção de descartar
+- [x] Offline: dieta/treino em cache por conta; check-ins offline em fila
+- [x] Conta: alterar senha, sair de todos os aparelhos, excluir conta
+- [x] Acessibilidade: rótulos em botões de ícone e áreas de toque de 44pt nas telas mexidas (revisão completa de contraste/fonte ampliada ainda não feita)
+- [x] Insights priorizam adesão/evolução (prompt + "Treinos 7d / meta" no lugar do total de registros)
+- [ ] Recuperação de senha por e-mail — **bloqueado**: precisa escolher um provedor de e-mail (SMTP/Resend/SES)
+- [ ] Onboarding sem chave própria (IA integrada ao produto) — **decisão de negócio**: quem paga o uso da IA
+- [ ] Deploy em produção: merge em `main`, gerar `AI_KEYS_SECRET` no `.env` da VPS (e guardar cópia fora dela), `./scripts/deploy.sh`
+- [ ] Configurar destino externo de backup (instalar rclone na VPS + `BACKUP_REMOTE`) e rodar `scripts/test-restore.sh`
+- [ ] Nova build Release no iPhone e validação dos fluxos (ver roteiro no DEVLOG, entrada de 2026-09-25)
 
 ### ⬜ Fase 3 — Produto (Chat / Insights)
 - [x] Corrigir `InsightsScreen.tsx`: substituir API removida do `expo-file-system` (`cacheDirectory`/`EncodingType`) para destravar "compartilhar relatório semanal" — **corrigido e confirmado em 2026-08-22** (troca de `import * as FileSystem from 'expo-file-system'` para `'expo-file-system/legacy'`, mesmo padrão já usado em `DietaScreen.tsx`). Testado via Expo Go/túnel no iPhone: compartilhamento do relatório semanal funcionando.
@@ -151,7 +204,7 @@ Planejado em 2026-09-08 (plano completo em `.claude/plans/fancy-gathering-eich.m
 - [ ] Planos de treino gerados por IA
 - [x] Lembretes locais (notificações sem push remoto) — **implementado e confirmado em 2026-08-26**. `src/services/reminders.ts` (`expo-notifications`, trigger `DAILY` local, sem push remoto), toggle + seletor de horário (07:00/12:00/19:00/21:00) na seção "Lembrete de treino" do Perfil, substituindo o placeholder "Em breve". Plugin `expo-notifications` reativado no `app.json` — necessário remover a chave `aps-environment` do `ios/AmigoFit/AmigoFit.entitlements` depois de cada `expo prebuild` (ver achado 2026-08-26 no registro de decisões). Testado no iPhone físico: ativação, escolha de horário e disparo da notificação funcionando.
 - [x] Gamificação: badges/conquistas além do streak atual — **implementado e confirmado em 2026-08-26**. `src/utils/achievements.ts` (8 conquistas client-side: primeira mensagem, streaks de 3/7/30 dias, 10 treinos, semana de sono completa, 50/100 registros no Diário — sem mudança de backend/DB), seção "Conquistas" nova na aba Insights (grid 2 colunas com barra de progresso), 5 testes novos (49/49 no total). Testado no iPhone físico do usuário.
-- [ ] Logar status HTTP nos logs do backend (achado #12)
+- [x] Logar status HTTP nos logs do backend (achado #12) — feito na Fase 7
 
 ---
 
@@ -193,3 +246,6 @@ Prioridade recomendada quando chegar a hora: Integração Health/Fit > Relatóri
 - 2026-08-26 (achado, não bloqueante): `npx expo prebuild` sem `--clean` não remove entitlements de plugins removidos do `app.json` — mesmo depois de tirar `expo-notifications` dos plugins, a chave `aps-environment` reapareceu em `ios/AmigoFit/AmigoFit.entitlements` numa prebuild seguinte (rodada para adicionar o plugin do HealthKit). Precisou remoção manual da chave no arquivo depois de cada `prebuild`. Se voltar a acontecer, checar esse arquivo antes de abrir o Xcode.
 - 2026-09-15: Habilitado teste no iPhone físico do usuário (iPhone 17 Pro Max, iOS 27) além do simulador. Bug raiz: o Xcode 27/iOS 27 instalados no Mac do usuário **exigem** adoção do UIScene lifecycle do UIKit — sem isso o app nem inicializa (`Application failed to launch: UIScene life cycle is required for apps built with this SDK`), e nem o upgrade pra SDK 57 (mais atual disponível) resolveu sozinho, porque o template nativo do Expo ainda não adota Scene lifecycle. Corrigido via config plugin novo `plugins/withIosSceneLifecycle.js` (gera `SceneDelegate.swift`, registra no `project.pbxproj`, adiciona `UIApplicationSceneManifest` no `Info.plist`, move a criação da janela do `AppDelegate.swift` pro Scene delegate — tudo reaplicado em todo `expo prebuild`, já que `ios/` é gerado/gitignored). Detalhes completos e todos os ajustes auxiliares (upgrade SDK 54→57, `plugins/withIosMinDeploymentTargetFix.js`, `ios.appleTeamId`, permissão de rede local, migração do splash) no DEVLOG (entrada de 2026-09-15). Ver riscos #22 e #23 (pendências que sobraram: splash pequena e `Simulator.app` quebrado nesta instalação do Xcode).
 - 2026-09-15: Gerada e validada uma build **Release** do app (via `xcodebuild -configuration Release`) pra uso no iPhone sem depender do Mac ligado nem do Metro — o JS já compilado (`main.jsbundle`) fica empacotado dentro do `.app`. Confirmado pelo usuário funcionando com o Metro derrubado de propósito e o cabo USB desconectado. Trade-off: sem hot reload — pra atualizar o app com mudanças de código novas, precisa reconectar o iPhone e gerar uma Release nova. Detalhes no DEVLOG (seção "Build Release: app independente do Mac/Metro").
+- 2026-09-25: Fase 7 criada a partir da análise de código de 2026-09-24 e colocada acima das Fases 3/4/5. Chaves de IA: escolhido guardá-las **criptografadas no servidor** (AES-256-GCM, chave mestra `AI_KEYS_SECRET` no `.env`, fora do banco) em vez de só no aparelho — mantém a restauração automática em aparelho novo e tira as chaves legíveis dos backups. O app não guarda nem envia mais a chave; o servidor a usa direto. **Perder `AI_KEYS_SECRET` = usuários precisam recadastrar as chaves** — guardar cópia fora da VPS.
+- 2026-09-25: Perfil saiu da barra de abas (abre pelo ⚙️ da nova tela "Hoje") para manter 6 abas.
+- 2026-09-25: Testes de integridade rodam contra PostgreSQL 16 real e descartável (binários do pacote `embedded-postgres`, sem Docker) — o banco mockado não prova constraints, cascade nem isolamento.

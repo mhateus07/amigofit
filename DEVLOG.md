@@ -248,6 +248,34 @@ Stack: `jest` + `jest-expo` (frontend/hooks) + `@testing-library/react-native` v
 
 ---
 
+## Fase 7: Confiabilidade e proteção dos dados — 2026-09-25
+
+Branch `fase-7-confiabilidade` (7 commits). Origem: análise de código de 2026-09-24. Detalhes por item no `ESCOPO.md` (Fase 7).
+
+**O que quebrava e por quê**
+- Salvar dieta/treino fazia `DELETE` de todos os itens e reinseria; `meal_checkins`/`workout_checkins` tinham `ON DELETE CASCADE` → todo o histórico de check-ins sumia a cada edição. Agora: upsert + `active=false`, FK composta `(id, user_id)` sem cascade (migração 2).
+- Upserts por `id` sem conferir dono → uma conta podia sobrescrever dados de outra. Agora `ON CONFLICT ... WHERE tabela.user_id = EXCLUDED.user_id` + checagem de dono (404/409).
+- O app engolia erros (`catch {}`, sem `res.ok`) → check-in "feito" que o servidor recusou, falha de rede = lista vazia = onboarding de novo. Agora `src/services/api.ts` + estados de erro com retry.
+
+**Arquitetura nova**
+- Backend em módulos: `server/db.js`, `server/migrations.js`, `server/lib/{auth,http,secrets,aiKeys,sessions}.js`, `server/ai/providers.js` (uma `callModel` para os 4 provedores), `server/routes/{auth,profile,messages,extracted,plans,workoutLogs,media,ai}.js`.
+- Migrações: 1 (schema inicial, idempotente), 2 (FKs com dono), 3 (`ai_keys`, `chat_images`, origem/`message_id` no diário, `extracted_at`, `token_version`, índices), 4 (`workout_set_logs`).
+- Novas rotas: `PUT/DELETE /api/messages`, `PATCH/DELETE /api/extracted-data/:id`, `GET/PUT/DELETE /api/ai-keys/:provider`, `POST/GET /api/chat-images`, `GET/PUT /api/workout-logs`, `GET /api/workout-logs/history`, `POST /auth/password`, `POST /auth/logout-all`, `DELETE /auth/account`.
+- Nova variável obrigatória em produção: `AI_KEYS_SECRET` (mín. 32 caracteres; `openssl rand -base64 48`). O `deploy.sh` se recusa a rodar sem ela.
+
+**Testes**: 138 (40 contra PostgreSQL 16 real via `server/testing/realDb.js`, incluindo a migração de um banco no formato atual de produção). Rodar: `npm test`.
+
+**Checagem de produção (somente leitura, 2026-09-25)**: FKs com os nomes esperados, 0 check-ins cruzados, 0 `source_ref` duplicado, 0 horário inválido, 0 categoria desconhecida, 1 perfil com chave em texto puro (será migrado no primeiro start com `AI_KEYS_SECRET`). 5 refeições e 0 check-ins.
+
+**Roteiro de validação no iPhone (depois do deploy + build Release nova)**
+1. Abrir o app já logado → a chave de IA antiga deve continuar funcionando (migrada para o servidor); Perfil mostra "chave terminada em XXXX".
+2. Dieta: marcar "Comi" numa refeição → editar o nome dela → o check-in continua lá.
+3. Chat: mandar mensagem com foto → fechar e reabrir o app → a foto continua na conversa. Tocar em "Identifiquei N registros · revisar".
+4. Modo avião: abrir Dieta/Treino → aparece a versão salva + aviso; marcar check-in → "pendente"; tirar modo avião e puxar para atualizar → sincroniza.
+5. Treino: "Registrar séries e cargas" → marcar ✓ numa série → cronômetro de descanso → Salvar → abrir de novo e ver "Última vez".
+6. Diário: tocar num registro → Corrigir / Excluir.
+7. Perfil (⚙️ na aba Hoje): Sair → entrar com outra conta → nada da conta anterior aparece.
+
 ## Próximos passos sugeridos
 
 - [ ] Substituir `assets/icon.png` e `assets/adaptive-icon.png` pelo ícone gerado no Lovart
