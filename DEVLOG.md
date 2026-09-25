@@ -276,6 +276,15 @@ Branch `fase-7-confiabilidade` (7 commits). Origem: análise de código de 2026-
 6. Diário: tocar num registro → Corrigir / Excluir.
 7. Perfil (⚙️ na aba Hoje): Sair → entrar com outra conta → nada da conta anterior aparece.
 
+## Fase 7 — validação e fichas de treino em PDF — 2026-09-25
+
+- **Validação no iPhone:** os 7 passos do roteiro confirmados pelo usuário. Fase 7 fechada.
+- **Fichas em PDF do app do personal:** os PDFs (1 página, texto + uma foto por exercício) tinham 19–75 MB. Upload inteiro falhou por limite de 60s do proxy (Traefik) e pela internet de casa subindo a 20–80 KB/s. Solução final: o iPhone lê o texto com PDFKit (`modules/pdf-text`, módulo Expo local — só `pod install`, sem prebuild) e envia as linhas com posição (~5 KB) para `POST /api/extract-workout/lines`; o servidor monta a ficha pelo layout (`workoutFromLines`), sem IA. Resultado idêntico ao leitor completo (pdfjs) nos 3 PDFs: 35 exercícios. Leitura em 6–33 ms.
+- Caminho completo (Android/builds sem o módulo): envio em partes de 512 KB binário (`/api/uploads`, sessão de upload em segundo plano, retentativas) + leitura por layout com pdfjs e recorte da foto de cada exercício na página renderizada (`@napi-rs/canvas`, validado no container Alpine). Um PDF pesado por vez (~1 GB de RAM).
+- Nova aba Treino (`src/components/WorkoutPlanView.tsx`, `src/utils/workout.ts`): seletor A/B/C, resumo com duração estimada, seções mobilidade × principal, técnicas (drop-set, rest-pause, pirâmide, escada, isometria, cadência, até a falha) com explicação.
+- Offline: perfil em cache (app abre sem internet), Chat e Diário com a última versão salva.
+- Gotcha: para ver prints/arquivos do usuário, a pasta Downloads é bloqueada para o terminal (macOS); os PDFs foram achados no iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/`).
+
 ## Próximos passos sugeridos
 
 - [ ] Substituir `assets/icon.png` e `assets/adaptive-icon.png` pelo ícone gerado no Lovart

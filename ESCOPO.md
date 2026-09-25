@@ -123,7 +123,7 @@ Como fazer, passo a passo:
 
 Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos gotchas do zero.
 
-### 🟨 Fase 7 — Confiabilidade e proteção dos dados — deployada 2026-09-25, falta validação no iPhone
+### ✅ Fase 7 — Confiabilidade e proteção dos dados — concluída 2026-09-25
 Origem: análise do código colada pelo usuário em 2026-09-24 (achados de perda de histórico, isolamento entre contas e falhas silenciosas). Prioridade acima das Fases 3/4/5, que ficam pausadas até fechar esta. Branch `fase-7-confiabilidade`. Código pronto, **128 testes passando (31 contra PostgreSQL 16 real)**, TypeScript sem erros. **Deployado em produção em 2026-09-25** (4 migrações aplicadas, chave em texto puro migrada para `ai_keys`) e build Release instalada no iPhone — falta o usuário validar os fluxos.
 
 Correções prioritárias (na ordem de gravidade):
@@ -170,7 +170,13 @@ Melhorias de produto:
 - [x] Deploy em produção — 2026-09-25: merge em `main`, `AI_KEYS_SECRET` gerado no `.env` da VPS (cópia fora dela em `~/.amigofit/AI_KEYS_SECRET` no Mac do usuário), `./scripts/deploy.sh` com backup antes e `/health` ok
 - [x] Backup externo no **Google Drive** — 2026-09-25: rclone na VPS (remote `gdrive`, escopo `drive.file`), `BACKUP_REMOTE=gdrive:amigofit-backups`, cron diário 03:00 já envia; `scripts/test-restore.sh` restaurou com sucesso. Sem retenção no Drive (arquivos pequenos; limpar manualmente se crescer)
 - [x] Nova build Release instalada no iPhone — 2026-09-25
-- [ ] Validação dos fluxos no iPhone pelo usuário (roteiro no DEVLOG, entrada de 2026-09-25)
+- [x] Validação dos fluxos no iPhone pelo usuário — **2026-09-25, 7/7 passos confirmados**: chave migrada e chat ok; check-in sobrevive à edição da refeição; foto do chat persiste; offline (abre sem internet, fila de check-ins sincroniza); séries/descanso/"última vez"; Diário corrigir/excluir; troca de conta sem vazar dados.
+
+Ajustes feitos durante a validação (todos deployados e confirmados no iPhone):
+- [x] Chat sempre abre na última mensagem (FlatList invertida)
+- [x] Mensagem clara quando o provedor de IA está sem créditos (OpenAI 429)
+- [x] App abre offline com o perfil salvo; Chat e Diário com cache
+- [x] **Fichas de treino em PDF (A/B/C do app do personal, 19–75 MB):** leitura no próprio iPhone (módulo nativo `modules/pdf-text`, PDFKit) enviando só ~5 KB de texto; leitor por layout no servidor (`server/ai/workoutPdf.js`) sem IA, com técnicas e observações; importação de vários PDFs de uma vez; nova aba Treino (seletor A/B/C, resumo, mobilidade × principal, cartões com séries/carga/descanso/técnicas/"última vez"). Fotos dos exercícios ficaram de fora por decisão do usuário (vídeos das execuções virão depois) — o servidor ainda sabe recortá-las se o PDF inteiro for enviado (caminho do Android).
 
 ### ⬜ Fase 3 — Produto (Chat / Insights)
 - [x] Corrigir `InsightsScreen.tsx`: substituir API removida do `expo-file-system` (`cacheDirectory`/`EncodingType`) para destravar "compartilhar relatório semanal" — **corrigido e confirmado em 2026-08-22** (troca de `import * as FileSystem from 'expo-file-system'` para `'expo-file-system/legacy'`, mesmo padrão já usado em `DietaScreen.tsx`). Testado via Expo Go/túnel no iPhone: compartilhamento do relatório semanal funcionando.
