@@ -11,6 +11,7 @@ process.env.UPLOAD_DIR = require('fs').mkdtempSync(require('path').join(require(
 // O leitor de layout usa pdfjs (ESM), que o Jest deste projeto não carrega;
 // ele tem testes próprios (workoutPdf.test.js) e foi validado nos PDFs reais.
 jest.mock('../ai/workoutPdf', () => ({
+  workoutFromLines: jest.requireActual('../ai/workoutPdf').workoutFromLines,
   extractWorkoutFromPdfLayout: jest.fn(async () => ({
     routine: 'Hipertrofia 02',
     plan: {
@@ -507,5 +508,35 @@ describe('ficha em PDF enviada em partes', () => {
   it('recusa arquivo acima do limite e tipo diferente de PDF', async () => {
     await request(app).post('/api/uploads').set('Authorization', A).send({ size: 300 * 1024 * 1024, mimeType: 'application/pdf' }).expect(413);
     await request(app).post('/api/uploads').set('Authorization', A).send({ size: 10, mimeType: 'video/mp4' }).expect(400);
+  });
+});
+
+describe('ficha lida no próprio iPhone (só texto)', () => {
+  const lines = [
+    { text: 'Rotina: Hipertrofia 02', x: 90, y: 1357, page: 1 },
+    { text: 'H2- B', x: 24, y: 1211, page: 1 },
+    { text: 'Tríceps puxador corda', x: 43, y: 400, page: 1 },
+    { text: 'Séries: 3x 12 rep', x: 43, y: 380, page: 1 },
+    { text: 'Carga: 41kg', x: 43, y: 367, page: 1 },
+    { text: 'Intervalo: 90s', x: 43, y: 353, page: 1 },
+    { text: '\uFFFC', x: 235, y: 330, page: 1 },
+    { text: 'Desenvolvimento c/ barra pronta', x: 43, y: 726, page: 1 },
+    { text: 'Séries: 3x 10-6-6 rep (escada crescente na', x: 43, y: 707, page: 1 },
+    { text: 'carga)', x: 43, y: 694, page: 1 },
+    { text: 'Carga: 22/26Kg', x: 43, y: 680, page: 1 },
+  ];
+
+  it('monta a ficha a partir das linhas, em qualquer ordem, sem chave de IA', async () => {
+    const res = await request(app).post('/api/extract-workout/lines').set('Authorization', B).send({ lines }).expect(200);
+    expect(res.body.method).toBe('layout');
+    expect(res.body.plans[0]).toMatchObject({ name: 'Treino B', dayLabel: 'H2- B', routine: 'Hipertrofia 02' });
+    expect(res.body.plans[0].exercises).toEqual([
+      { name: 'Desenvolvimento c/ barra pronta', sets: 3, reps: '10-6-6', load: '22/26Kg', notes: 'escada crescente na carga' },
+      { name: 'Tríceps puxador corda', sets: 3, reps: '12', load: '41kg', restSeconds: 90 },
+    ]);
+  });
+
+  it('PDF sem texto dá erro claro', async () => {
+    await request(app).post('/api/extract-workout/lines').set('Authorization', B).send({ lines: [] }).expect(422);
   });
 });

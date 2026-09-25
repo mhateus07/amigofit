@@ -9,8 +9,9 @@
 const FIELD_RE = /^(s[ée]ries|carga|intervalo|descanso|obs(?:erva[çc][ãa]o)?)\s*:\s*(.*)$/i;
 
 function cleanText(s) {
-  // Remove ícones de fonte (área de uso privado do Unicode) e espaços extras.
-  return s.replace(/[-]/g, '').replace(/\s+/g, ' ').trim();
+  // Remove ícones de fonte (área de uso privado do Unicode), o marcador de
+  // imagem U+FFFC que o PDFKit do iPhone põe no lugar das fotos, e espaços extras.
+  return s.replace(/[\uE000-\uF8FF\uFFFC]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function parseRest(value) {
@@ -252,4 +253,29 @@ async function extractWorkoutFromPdfLayout(buffer) {
   }
 }
 
-module.exports = { extractWorkoutFromPdfLayout, parseWorkoutLines, parseSeries, parseRest, assignImages };
+// Ficha a partir das linhas de texto lidas no próprio aparelho (PDFKit no
+// iPhone): só ~5 KB sobem, em vez do PDF de dezenas de MB. Sem fotos.
+function workoutFromLines(rawLines) {
+  const lines = rawLines
+    .filter((l) => l && typeof l.text === 'string' && Number.isFinite(l.x) && Number.isFinite(l.y))
+    .map((l) => ({ text: l.text, x: l.x, y: l.y, page: Number.isInteger(l.page) ? l.page : 1 }))
+    .sort((a, b) => a.page - b.page || b.y - a.y);
+  const parsed = parseWorkoutLines(lines);
+  if (parsed.exercises.length === 0) return null;
+  const letter = parsed.planName && parsed.planName.match(/([A-Z])\s*$/);
+  return {
+    name: letter ? `Treino ${letter[1]}` : (parsed.planName || 'Treino'),
+    dayLabel: parsed.planName || null,
+    routine: parsed.routine || null,
+    exercises: parsed.exercises.map((e) => ({
+      name: e.name.slice(0, 100),
+      sets: e.sets,
+      reps: e.reps ? e.reps.slice(0, 50) : undefined,
+      load: e.load ? e.load.slice(0, 50) : undefined,
+      restSeconds: e.restSeconds,
+      notes: e.notes ? e.notes.slice(0, 500) : undefined,
+    })),
+  };
+}
+
+module.exports = { extractWorkoutFromPdfLayout, workoutFromLines, parseWorkoutLines, parseSeries, parseRest, assignImages };

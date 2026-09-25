@@ -6,6 +6,7 @@ import {
   LoggedSet, ExerciseSessionHistory,
 } from '../types';
 import { API_BASE, TOKEN_KEY, AI_TIMEOUT_MS, apiRequest, newSessionEpoch, ApiError } from './api';
+import { isPdfTextAvailable, extractPdfLines } from '../../modules/pdf-text';
 
 export { API_BASE };
 
@@ -270,9 +271,20 @@ async function getWorkoutCheckins(date: string): Promise<WorkoutCheckin[]> {
 async function checkInWorkout(workoutPlanId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
   await apiRequest('/api/workout-plans/checkins', { method: 'POST', body: { workoutPlanId, date, status } });
 }
-// Fichas no formato de apps de personal são lidas sem IA, com a foto de
-// cada exercício; outros formatos caem na leitura por IA.
+// No iPhone, o texto do PDF é lido no próprio aparelho (PDFKit) e só ~5 KB
+// sobem — rápido mesmo com internet lenta e PDFs de 75 MB (sem as fotos).
+// Sem o módulo nativo (Android), o PDF inteiro é enviado em partes e o
+// servidor lê o texto e recorta as fotos. Formato de app de personal é lido
+// sem IA; outros formatos caem na IA.
 async function extractWorkoutFromPdf(fileUri: string, onProgress?: UploadProgress): Promise<Omit<WorkoutPlan, 'id'>[]> {
+  if (isPdfTextAvailable()) {
+    const lines = await extractPdfLines(fileUri);
+    onProgress?.(1);
+    const { plans } = await apiRequest<{ plans: Omit<WorkoutPlan, 'id'>[] }>('/api/extract-workout/lines', {
+      method: 'POST', body: { lines }, timeoutMs: AI_TIMEOUT_MS,
+    });
+    return plans;
+  }
   const id = await uploadPdfInChunks(fileUri, onProgress);
   const { plans } = await apiRequest<{ plans: Omit<WorkoutPlan, 'id'>[] }>(`/api/extract-workout/upload/${id}`, { method: 'POST', timeoutMs: AI_TIMEOUT_MS });
   return plans;

@@ -8,7 +8,7 @@ const { HttpError, text, arrayOf } = require('../lib/http');
 const { replaceMessageExtraction } = require('./extracted');
 const { consumeUpload } = require('./uploads');
 const { saveExerciseImage } = require('./media');
-const { extractWorkoutFromPdfLayout } = require('../ai/workoutPdf');
+const { extractWorkoutFromPdfLayout, workoutFromLines } = require('../ai/workoutPdf');
 
 const router = express.Router();
 
@@ -216,6 +216,27 @@ router.post('/extract-workout/upload/:id', async (req, res) => {
     throw new HttpError(413, 'Este PDF é escaneado e grande demais para a IA ler (máx. 25 MB). Tente exportá-lo com menos páginas ou em qualidade menor.');
   }
   const plans = await extractFromPdf(req, config, buffer, WORKOUT);
+  res.json({ plans, method: 'ai' });
+});
+
+// Ficha lida no próprio iPhone (PDFKit): chegam só as linhas de texto com
+// posição (~5 KB), não o PDF de dezenas de MB. Formato de app de personal é
+// lido sem IA; outro formato vai para a IA como texto.
+router.post('/extract-workout/lines', async (req, res) => {
+  const lines = arrayOf(req.body?.lines, 'lines', { max: 5000 });
+  const plan = workoutFromLines(lines);
+  if (plan) return res.json({ plans: [{ ...plan, source: 'pdf' }], method: 'layout' });
+
+  const content = lines
+    .filter((l) => l && typeof l.text === 'string')
+    .map((l) => l.text)
+    .join('\n')
+    .slice(0, 60000);
+  if (content.trim().length < 30) {
+    throw new HttpError(422, 'Não encontramos texto neste PDF (pode ser uma imagem escaneada). Tente importar por foto (📷), ou monte a ficha manualmente.');
+  }
+  const config = await aiKeys.resolveAiConfig(req);
+  const plans = await withProvider(req, (c) => ai.extractWorkoutFromText(c, content), () => config);
   res.json({ plans, method: 'ai' });
 });
 
