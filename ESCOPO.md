@@ -1,6 +1,6 @@
 # AmigoFit — Escopo e Guia de Execução
 
-*Atualizado em 2026-07-17. Este é o único documento que você deveria abrir no dia a dia. `PLANEJAMENTO.md` e `PLANEJAMENTO_AMIGOFIT.md` são visão de produto (consultar raramente); `DEVLOG.md` é changelog (só escrever, não planejar a partir dele).*
+*Atualizado em 2026-09-25. Este é o único documento que você deveria abrir no dia a dia. `PLANEJAMENTO.md` e `PLANEJAMENTO_AMIGOFIT.md` são visão de produto (consultar raramente); `DEVLOG.md` é changelog (só escrever, não planejar a partir dele).*
 
 ---
 
@@ -122,6 +122,28 @@ Como fazer, passo a passo:
 - Teste de `WelcomeScreen` ainda imprime um aviso benigno `overlapping act() calls` no console (por causa das animações do `useEffect`) — não falha o teste, mas ficou como possível limpeza futura, não bloqueante.
 
 Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos gotchas do zero.
+
+### 📌 Ficou para depois (consolidado em 2026-09-25)
+Estado: **Fase 7 concluída e validada no iPhone** (ver abaixo). Nada em andamento. Próxima sessão: escolher entre os itens abaixo.
+
+Decididos pelo usuário como "depois":
+- [ ] Recuperação de senha por e-mail — precisa escolher provedor (Resend, SES ou SMTP)
+- [ ] IA integrada ao produto no onboarding (sem chave própria) — decisão de negócio: quem paga o uso da IA
+- [ ] Vídeos das execuções nos exercícios, integrados à nova aba Treino (upload de vídeo por exercício já existe) — substitui as fotos que ficaram de fora da importação do PDF
+- [ ] Fotos dos exercícios no iPhone (opcional): hoje o iPhone lê só o texto do PDF; o servidor já sabe recortar as fotos se receber o PDF inteiro (caminho do Android), mas a internet de casa é lenta demais para 19–75 MB
+
+Fases que voltam a valer:
+- [ ] Fase 3 — Avaliar streaming no chat
+- [ ] Fase 5 — Consulta em linguagem natural sobre os próprios dados; foto da refeição no chat (o envio de foto no chat já funciona e persiste — falta a análise nutricional)
+- [ ] Fase 4 — Health Connect (Android), push via EAS (conta Apple paga), planos de treino gerados por IA
+
+Pendências técnicas/pequenas:
+- [ ] Risco #21 — propagar o polimento visual do Chat para as demais telas
+- [ ] Risco #22 — splash pequena; risco #23 — Simulator.app quebrado no Xcode local
+- [ ] Revisão completa de acessibilidade (contraste, fonte ampliada) — rótulos e áreas de toque já feitos nas telas mexidas
+- [ ] Rotação da ficha do dia pelo histórico (hoje: dia da semana no rótulo, senão a próxima não feita hoje)
+- [ ] Retenção dos backups no Google Drive (hoje acumulam; ~13 KB/dia)
+- [ ] Conta de teste criada pelo usuário na validação ainda existe (apagar pelo app se quiser)
 
 ### ✅ Fase 7 — Confiabilidade e proteção dos dados — concluída 2026-09-25
 Origem: análise do código colada pelo usuário em 2026-09-24 (achados de perda de histórico, isolamento entre contas e falhas silenciosas). Prioridade acima das Fases 3/4/5, que ficam pausadas até fechar esta. Branch `fase-7-confiabilidade`. Código pronto, **128 testes passando (31 contra PostgreSQL 16 real)**, TypeScript sem erros. **Deployado em produção em 2026-09-25** (4 migrações aplicadas, chave em texto puro migrada para `ai_keys`) e build Release instalada no iPhone — falta o usuário validar os fluxos.
