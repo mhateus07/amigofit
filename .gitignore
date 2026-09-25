@@ -50,3 +50,6 @@ server/.env
 
 # Claude memory (local only)
 .claude/
+
+# Arquivos enviados (vídeos/imagens) em desenvolvimento local
+uploads/

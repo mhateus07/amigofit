@@ -4,6 +4,16 @@
 // Testes contra um PostgreSQL real: histórico preservado, isolamento entre
 // contas e concorrência. Os demais testes do backend usam pg mockado.
 process.env.JWT_SECRET = 'test_secret_only_for_jest';
+process.env.AI_KEYS_SECRET = 'segredo-de-teste-com-mais-de-32-caracteres';
+process.env.NODE_ENV = 'test';
+process.env.UPLOAD_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'amigofit-up-')) + '/exercise-videos';
+
+jest.mock('@anthropic-ai/sdk', () => {
+  const mCreate = jest.fn();
+  const MockAnthropic = jest.fn().mockImplementation(() => ({ messages: { create: mCreate } }));
+  MockAnthropic.__mockCreate = mCreate;
+  return MockAnthropic;
+});
 
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
@@ -36,14 +46,14 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE meal_checkins, workout_checkins, extracted_data, messages, meals, workout_plans RESTART IDENTITY`);
+  await pool.query(`TRUNCATE meal_checkins, workout_checkins, extracted_data, messages, meals, workout_plans, ai_keys, profiles, chat_images RESTART IDENTITY`);
 });
 
 describe('migrações', () => {
   it('são idempotentes (rodar de novo não falha nem reaplica)', async () => {
     await initDB();
     const { rows } = await pool.query('SELECT id FROM schema_migrations ORDER BY id');
-    expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining([1, 2]));
+    expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining([1, 2, 3]));
   });
 });
 
@@ -217,5 +227,172 @@ describe('mensagens', () => {
 
   it('rejeita mensagem inválida', async () => {
     await request(app).put('/api/messages/x').set('Authorization', A).send({ role: 'system', content: 'x', timestamp: 1 }).expect(400);
+  });
+});
+
+describe('chaves de IA', () => {
+  it('ficam criptografadas no banco e a API só devolve os 4 últimos caracteres', async () => {
+    const res = await request(app).put('/api/ai-keys/anthropic').set('Authorization', A)
+      .send({ apiKey: 'sk-ant-segredo-1234' }).expect(200);
+    expect(res.body.keys).toEqual({ anthropic: { last4: '1234' } });
+    const { rows } = await pool.query('SELECT secret FROM ai_keys');
+    expect(rows[0].secret).not.toContain('segredo');
+    const profile = await request(app).get('/api/ai-keys').set('Authorization', A);
+    expect(JSON.stringify(profile.body)).not.toContain('segredo');
+  });
+
+  it('o servidor usa a chave salva quando o app não envia x-api-key', async () => {
+    const Anthropic = require('@anthropic-ai/sdk');
+    Anthropic.__mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'oi!' }] });
+    await request(app).put('/api/ai-keys/anthropic').set('Authorization', A).send({ apiKey: 'sk-ant-segredo-1234' });
+    const res = await request(app).post('/api/chat').set('Authorization', A)
+      .send({ messages: [{ role: 'user', content: 'olá' }], systemPrompt: 'x' }).expect(200);
+    expect(res.body.text).toBe('oi!');
+    expect(Anthropic).toHaveBeenLastCalledWith(expect.objectContaining({ apiKey: 'sk-ant-segredo-1234' }));
+  });
+
+  it('sem chave salva nem enviada, a IA responde 401', async () => {
+    await request(app).post('/api/chat').set('Authorization', B)
+      .send({ messages: [{ role: 'user', content: 'olá' }], systemPrompt: 'x' }).expect(401);
+  });
+
+  it('chaves antigas em texto puro no perfil são migradas e removidas do JSON', async () => {
+    await pool.query(`INSERT INTO profiles (user_id, data) VALUES ('u_a', $1)`,
+      [JSON.stringify({ name: 'A', aiProvider: 'groq', aiApiKeys: { groq: 'gsk_antiga_9876', openai: '' } })]);
+    await initDB();
+    const { rows } = await pool.query("SELECT data FROM profiles WHERE user_id='u_a'");
+    expect(rows[0].data.aiApiKeys).toBeUndefined();
+    const keys = await request(app).get('/api/ai-keys').set('Authorization', A);
+    expect(keys.body.keys).toEqual({ groq: { last4: '9876' } });
+  });
+});
+
+describe('perfil', () => {
+  it('salvar parte dos campos não apaga os outros e descarta chaves enviadas no perfil', async () => {
+    await request(app).post('/api/profile').set('Authorization', A)
+      .send({ name: 'A', goal: 'health', level: 'beginner', onboardingComplete: true, aiProvider: 'groq' }).expect(200);
+    await request(app).post('/api/profile').set('Authorization', A)
+      .send({ name: 'A2', aiApiKeys: { groq: 'gsk_vazada' } }).expect(200);
+    const res = await request(app).get('/api/profile').set('Authorization', A);
+    expect(res.body.profile).toEqual({ name: 'A2', goal: 'health', level: 'beginner', onboardingComplete: true, aiProvider: 'groq' });
+  });
+
+  it('rejeita valores inválidos', async () => {
+    await request(app).post('/api/profile').set('Authorization', A).send({ goal: 'voar' }).expect(400);
+  });
+});
+
+describe('diário', () => {
+  it('sincronizar de novo com o mesmo sourceRef atualiza em vez de duplicar', async () => {
+    const item = { category: 'performance', label: 'Passos', value: '3.000 passos', timestamp: 1, source: 'apple_health', sourceRef: 'apple_health:steps:2026-09-20' };
+    await request(app).post('/api/extracted-data').set('Authorization', A).send({ data: [item] }).expect(200);
+    await request(app).post('/api/extracted-data').set('Authorization', A)
+      .send({ data: [{ ...item, value: '9.000 passos' }] }).expect(200);
+    const res = await request(app).get('/api/extracted-data').set('Authorization', A);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ value: '9.000 passos', source: 'apple_health' });
+  });
+
+  it('rejeita categoria desconhecida', async () => {
+    await request(app).post('/api/extracted-data').set('Authorization', A)
+      .send({ data: [{ category: 'astrologia', label: 'x', value: 'y', timestamp: 1 }] }).expect(400);
+  });
+
+  it('permite corrigir e excluir só os próprios registros', async () => {
+    const created = await request(app).post('/api/extracted-data').set('Authorization', A)
+      .send({ data: [{ category: 'mood', label: 'Humor', value: 'bom', timestamp: 1 }] });
+    const id = created.body.ids[0];
+    await request(app).patch(`/api/extracted-data/${id}`).set('Authorization', B).send({ value: 'hackeado' }).expect(404);
+    await request(app).delete(`/api/extracted-data/${id}`).set('Authorization', B).expect(404);
+    const fixed = await request(app).patch(`/api/extracted-data/${id}`).set('Authorization', A).send({ value: 'ótimo' }).expect(200);
+    expect(fixed.body.data.value).toBe('ótimo');
+    await request(app).delete(`/api/extracted-data/${id}`).set('Authorization', A).expect(200);
+    const { rows } = await pool.query('SELECT 1 FROM extracted_data');
+    expect(rows).toHaveLength(0);
+  });
+
+  it('extração vinculada à mensagem é idempotente e marca a mensagem como processada', async () => {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const reply = { content: [{ type: 'text', text: JSON.stringify({ data: [{ category: 'sleep', label: 'Sono', value: '7h', rawText: 'dormi 7h' }, { category: 'inventada', label: 'x', value: 'y' }] }) }] };
+    Anthropic.__mockCreate.mockResolvedValue(reply);
+    await request(app).put('/api/messages/m1').set('Authorization', A).send({ role: 'user', content: 'dormi 7h', timestamp: 1000 });
+    await request(app).post('/api/extract').set('Authorization', A).set('x-api-key', 'k')
+      .send({ message: 'dormi 7h', messageId: 'm1' }).expect(200);
+    const again = await request(app).post('/api/extract').set('Authorization', A).set('x-api-key', 'k')
+      .send({ message: 'dormi 7h', messageId: 'm1' }).expect(200);
+    expect(again.body.data).toHaveLength(1); // a categoria inventada foi descartada
+    const { rows } = await pool.query('SELECT message_id, source, timestamp FROM extracted_data');
+    expect(rows).toEqual([{ message_id: 'm1', source: 'chat', timestamp: '1001' }]);
+    const msgs = await request(app).get('/api/messages').set('Authorization', A);
+    expect(msgs.body.messages[0].extractedAt).toEqual(expect.any(Number));
+    // Outra conta não consegue extrair para a mensagem de A.
+    await request(app).post('/api/extract').set('Authorization', B).set('x-api-key', 'k')
+      .send({ message: 'x', messageId: 'm1' }).expect(404);
+    Anthropic.__mockCreate.mockReset();
+  });
+});
+
+describe('imagens do chat', () => {
+  it('são salvas com dono e vinculadas à mensagem', async () => {
+    const png = Buffer.from('fake png').toString('base64');
+    const up = await request(app).post('/api/chat-images').set('Authorization', A)
+      .send({ imageBase64: png, mimeType: 'image/png' }).expect(200);
+    await request(app).put('/api/messages/img1').set('Authorization', A)
+      .send({ role: 'user', content: '📷', timestamp: 5, imageId: up.body.id }).expect(200);
+    const file = await request(app).get(`/api/chat-images/${up.body.id}/file`).set('Authorization', A).expect(200);
+    expect(file.body.toString()).toBe('fake png');
+    await request(app).get(`/api/chat-images/${up.body.id}/file`).set('Authorization', B).expect(404);
+    // B não pode anexar a imagem de A numa mensagem própria.
+    await request(app).put('/api/messages/img2').set('Authorization', B)
+      .send({ role: 'user', content: '📷', timestamp: 5, imageId: up.body.id }).expect(400);
+    const msgs = await request(app).get('/api/messages').set('Authorization', A);
+    expect(msgs.body.messages[0].imageId).toBe(up.body.id);
+  });
+});
+
+describe('sessões e conta', () => {
+  const bcrypt = require('bcryptjs');
+
+  beforeEach(async () => {
+    await pool.query(`INSERT INTO users (id, name, email, password_hash) VALUES ('u_c','C','c@x.com',$1)
+      ON CONFLICT (id) DO UPDATE SET password_hash=$1, token_version=0`, [await bcrypt.hash('senha123', 4)]);
+  });
+
+  it('"sair de todos os aparelhos" invalida tokens já emitidos', async () => {
+    const C = tokenFor('u_c');
+    await request(app).get('/api/profile').set('Authorization', C).expect(200);
+    await request(app).post('/auth/logout-all').set('Authorization', C).expect(200);
+    await request(app).get('/api/profile').set('Authorization', C).expect(401);
+  });
+
+  it('trocar a senha exige a atual e devolve um token novo válido', async () => {
+    const C = tokenFor('u_c');
+    await request(app).post('/auth/password').set('Authorization', C)
+      .send({ currentPassword: 'errada', newPassword: 'nova12345' }).expect(403);
+    const res = await request(app).post('/auth/password').set('Authorization', C)
+      .send({ currentPassword: 'senha123', newPassword: 'nova12345' }).expect(200);
+    await request(app).get('/api/profile').set('Authorization', C).expect(401);
+    await request(app).get('/api/profile').set('Authorization', `Bearer ${res.body.token}`).expect(200);
+  });
+
+  it('excluir a conta apaga todos os dados do usuário', async () => {
+    const C = tokenFor('u_c');
+    await request(app).post('/api/meal-plan').set('Authorization', C).send({ meals: [{ id: 'mc', name: 'x', time: '10:00' }] });
+    await request(app).post('/api/meal-plan/checkins').set('Authorization', C).send({ mealId: 'mc', date: '2026-09-20', status: 'done' });
+    await request(app).put('/api/messages/mc1').set('Authorization', C).send({ role: 'user', content: 'x', timestamp: 1 });
+    await request(app).delete('/auth/account').set('Authorization', C).send({ password: 'errada' }).expect(403);
+    await request(app).delete('/auth/account').set('Authorization', C).send({ password: 'senha123' }).expect(200);
+    for (const t of ['users', 'meals', 'meal_checkins', 'messages', 'extracted_data']) {
+      const col = t === 'users' ? 'id' : 'user_id';
+      const { rowCount } = await pool.query(`SELECT 1 FROM ${t} WHERE ${col}='u_c'`);
+      expect(rowCount).toBe(0);
+    }
+    await request(app).get('/api/profile').set('Authorization', C).expect(401);
+  });
+});
+
+describe('health', () => {
+  it('confere o banco', async () => {
+    await request(app).get('/health').expect(200, { ok: true });
   });
 });

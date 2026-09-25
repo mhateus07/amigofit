@@ -3,8 +3,11 @@
  */
 process.env.JWT_SECRET = 'test_secret_only_for_jest';
 
+// requireAuth consulta a versão do token no banco; aqui a sessão é sempre válida.
+jest.mock('../lib/sessions', () => ({ currentTokenVersion: jest.fn().mockResolvedValue(0) }));
+
 jest.mock('pg', () => {
-  const mQuery = jest.fn();
+  const mQuery = jest.fn(() => Promise.resolve({ rows: [], rowCount: 0 }));
   return {
     Pool: jest.fn().mockImplementation(() => ({ query: mQuery, connect: jest.fn() })),
     __mockQuery: mQuery,
@@ -57,7 +60,7 @@ describe('POST /api/transcribe', () => {
     expect(res.status).toBe(400);
   });
 
-  it('retorna 500 com mensagem clara quando o provedor é anthropic', async () => {
+  it('retorna 401 com mensagem clara quando o provedor é anthropic', async () => {
     const res = await request(app)
       .post('/api/transcribe')
       .set('Authorization', `Bearer ${authToken()}`)
@@ -65,7 +68,7 @@ describe('POST /api/transcribe', () => {
       .set('x-provider', 'anthropic')
       .send({ audioBase64: AUDIO_B64, mimeType: 'audio/m4a' });
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/não suporta transcrição/);
   });
 
@@ -107,7 +110,7 @@ describe('POST /api/transcribe', () => {
     expect(res.body.text).toBe('treinei pernas hoje');
   });
 
-  it('retorna 500 quando o provedor falha', async () => {
+  it('retorna 502 com a mensagem do provedor quando ele falha', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -121,7 +124,7 @@ describe('POST /api/transcribe', () => {
       .set('x-provider', 'groq')
       .send({ audioBase64: AUDIO_B64, mimeType: 'audio/m4a' });
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     expect(res.body.error).toBe('Invalid API key');
   });
 });

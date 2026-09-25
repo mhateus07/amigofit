@@ -3,8 +3,11 @@
  */
 process.env.JWT_SECRET = 'test_secret_only_for_jest';
 
+// requireAuth consulta a versão do token no banco; aqui a sessão é sempre válida.
+jest.mock('../lib/sessions', () => ({ currentTokenVersion: jest.fn().mockResolvedValue(0) }));
+
 jest.mock('pg', () => {
-  const mQuery = jest.fn();
+  const mQuery = jest.fn(() => Promise.resolve({ rows: [], rowCount: 0 }));
   const mClientQuery = jest.fn();
   const mRelease = jest.fn();
   return {

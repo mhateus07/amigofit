@@ -109,6 +109,72 @@ const MIGRATIONS = [
         FOREIGN KEY (workout_plan_id, user_id) REFERENCES workout_plans (id, user_id) NOT VALID;
     `,
   },
+  {
+    id: 3,
+    name: 'chaves de IA criptografadas, origem dos registros, imagens do chat, sessões e índices',
+    sql: `
+      -- Chaves de API de IA ficam criptografadas (AES-256-GCM, chave mestra
+      -- fora do banco) em vez de texto puro dentro de profiles.data.
+      CREATE TABLE ai_keys (
+        user_id TEXT NOT NULL REFERENCES users(id),
+        provider TEXT NOT NULL,
+        secret TEXT NOT NULL,
+        last4 TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (user_id, provider)
+      );
+
+      -- Origem de cada registro do Diário e vínculo com a mensagem que o gerou
+      -- (antes o reprocessamento adivinhava por proximidade de horário).
+      ALTER TABLE extracted_data ADD COLUMN source TEXT;
+      ALTER TABLE extracted_data ADD COLUMN message_id TEXT;
+      UPDATE extracted_data SET source = 'meal_checkin' WHERE source_ref LIKE 'meal_checkin:%';
+      UPDATE extracted_data SET source = 'workout_checkin' WHERE source_ref LIKE 'workout_checkin:%';
+      UPDATE extracted_data SET source = 'apple_health' WHERE source IS NULL AND raw_text LIKE '[Apple Saúde]%';
+      UPDATE extracted_data SET source = 'health_connect' WHERE source IS NULL AND raw_text LIKE '[Health Connect]%';
+      -- source_ref único por usuário: permite upsert idempotente (ex.: passos
+      -- do dia vindos do Apple Saúde) em vez de duplicar a cada sincronização.
+      DELETE FROM extracted_data a USING extracted_data b
+        WHERE a.source_ref IS NOT NULL AND a.user_id = b.user_id
+          AND a.source_ref = b.source_ref AND a.id < b.id;
+      CREATE UNIQUE INDEX extracted_data_user_source_ref_idx
+        ON extracted_data (user_id, source_ref) WHERE source_ref IS NOT NULL;
+      CREATE INDEX extracted_data_user_ts_idx ON extracted_data (user_id, timestamp DESC);
+      CREATE INDEX extracted_data_user_message_idx ON extracted_data (user_id, message_id) WHERE message_id IS NOT NULL;
+
+      -- Marca quando a extração de uma mensagem terminou (mesmo sem dados).
+      -- Mensagens antigas: considera processada se havia registro até 10s
+      -- depois dela (a heurística que o app usava até aqui), uma única vez.
+      ALTER TABLE messages ADD COLUMN extracted_at BIGINT;
+      ALTER TABLE messages ADD COLUMN image_id TEXT;
+      UPDATE messages m SET extracted_at = m.timestamp
+        WHERE m.role = 'user' AND EXISTS (
+          SELECT 1 FROM extracted_data d
+          WHERE d.user_id = m.user_id AND abs(d.timestamp - m.timestamp) < 10000
+        );
+      CREATE INDEX messages_user_ts_idx ON messages (user_id, timestamp DESC);
+
+      CREATE TABLE chat_images (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX chat_images_user_idx ON chat_images (user_id);
+      CREATE INDEX exercise_videos_user_idx ON exercise_videos (user_id);
+
+      CREATE INDEX meal_checkins_user_date_idx ON meal_checkins (user_id, date);
+      CREATE INDEX workout_checkins_user_date_idx ON workout_checkins (user_id, date);
+      CREATE INDEX meals_user_active_idx ON meals (user_id) WHERE active;
+      CREATE INDEX workout_plans_user_active_idx ON workout_plans (user_id) WHERE active;
+
+      -- Incrementar invalida todos os tokens JWT já emitidos (sair de todos os
+      -- aparelhos, troca de senha).
+      ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 async function runMigrations(pool, migrations = MIGRATIONS) {

@@ -3,8 +3,11 @@
  */
 process.env.JWT_SECRET = 'test_secret_only_for_jest';
 
+// requireAuth consulta a versão do token no banco; aqui a sessão é sempre válida.
+jest.mock('../lib/sessions', () => ({ currentTokenVersion: jest.fn().mockResolvedValue(0) }));
+
 jest.mock('pg', () => {
-  const mQuery = jest.fn();
+  const mQuery = jest.fn(() => Promise.resolve({ rows: [], rowCount: 0 }));
   return {
     Pool: jest.fn().mockImplementation(() => ({ query: mQuery, connect: jest.fn() })),
     __mockQuery: mQuery,
@@ -80,8 +83,7 @@ describe('POST /api/extract-workout', () => {
       .set('x-api-key', 'fake-key')
       .send({ pdfBase64: 'aGVsbG8=' });
 
-    expect(res.status).toBe(200);
-    expect(res.body.plans).toEqual([]);
+    expect(res.status).toBe(422);
     expect(res.body.error).toEqual(expect.any(String));
   });
 
@@ -94,8 +96,7 @@ describe('POST /api/extract-workout', () => {
       .set('x-api-key', 'fake-key')
       .send({ pdfBase64: 'not-a-real-pdf' });
 
-    expect(res.status).toBe(200);
-    expect(res.body.plans).toEqual([]);
+    expect(res.status).toBe(422);
     expect(res.body.error).toEqual(expect.any(String));
   });
 
@@ -172,8 +173,7 @@ describe('POST /api/extract-workout', () => {
       .set('x-provider', 'groq')
       .send({ imageBase64: 'aGVsbG8=', mimeType: 'image/jpeg' });
 
-    expect(res.status).toBe(200);
-    expect(res.body.plans).toEqual([]);
+    expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/não suporta análise de imagem/);
   });
 });

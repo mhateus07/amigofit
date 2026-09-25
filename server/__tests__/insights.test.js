@@ -3,8 +3,11 @@
  */
 process.env.JWT_SECRET = 'test_secret_only_for_jest';
 
+// requireAuth consulta a versão do token no banco; aqui a sessão é sempre válida.
+jest.mock('../lib/sessions', () => ({ currentTokenVersion: jest.fn().mockResolvedValue(0) }));
+
 jest.mock('pg', () => {
-  const mQuery = jest.fn();
+  const mQuery = jest.fn(() => Promise.resolve({ rows: [], rowCount: 0 }));
   return {
     Pool: jest.fn().mockImplementation(() => ({ query: mQuery, connect: jest.fn() })),
     __mockQuery: mQuery,
@@ -104,7 +107,7 @@ describe('POST /api/insights', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('retorna 500 quando o provedor falha', async () => {
+  it('retorna 502 quando o provedor falha', async () => {
     mockCreate.mockRejectedValueOnce(new Error('provider down'));
 
     const res = await request(app)
@@ -113,7 +116,7 @@ describe('POST /api/insights', () => {
       .set('x-api-key', 'fake-key')
       .send({ data: sampleData });
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
     expect(res.body.error).toEqual(expect.any(String));
   });
 });
