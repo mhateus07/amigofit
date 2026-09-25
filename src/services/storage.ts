@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
   Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin, AiInsight, WorkoutPlan, WorkoutCheckin,
+  LoggedSet, ExerciseSessionHistory,
 } from '../types';
 import { API_BASE, TOKEN_KEY, AI_TIMEOUT_MS, apiRequest, newSessionEpoch, ApiError } from './api';
 
@@ -213,6 +214,24 @@ async function extractWorkoutFromImage(imageBase64: string, mimeType: string): P
   return plans;
 }
 
+// ── Séries realizadas ─────────────────────────────────────
+// exerciseId: id do exercício na ficha (ou o nome, em fichas antigas sem id).
+async function getWorkoutLogs(date: string, workoutPlanId?: string): Promise<(LoggedSet & { exerciseId: string; setIndex: number })[]> {
+  const qs = new URLSearchParams({ date, ...(workoutPlanId ? { workoutPlanId } : {}) });
+  const { sets } = await apiRequest<{ sets: (LoggedSet & { exerciseId: string; setIndex: number })[] }>(`/api/workout-logs?${qs}`);
+  return sets;
+}
+async function saveExerciseSets(
+  workoutPlanId: string, exerciseId: string, exerciseName: string, date: string, sets: LoggedSet[]
+): Promise<void> {
+  await apiRequest('/api/workout-logs', { method: 'PUT', body: { workoutPlanId, exerciseId, exerciseName, date, sets } });
+}
+async function getExerciseHistory(exerciseName: string, limit = 12): Promise<ExerciseSessionHistory[]> {
+  const qs = new URLSearchParams({ exercise: exerciseName, limit: String(limit) });
+  const { history } = await apiRequest<{ history: ExerciseSessionHistory[] }>(`/api/workout-logs/history?${qs}`);
+  return history;
+}
+
 // ── Exercise videos ──────────────────────────────────────────
 async function uploadExerciseVideo(fileUri: string, mimeType: string): Promise<string> {
   const token = await getToken();
@@ -305,6 +324,7 @@ export const storage = {
   getExtractedData, addExtractedData, updateExtractedData, deleteExtractedData,
   getMealPlan, saveMealPlan, getCheckins, checkInMeal, extractMealsFromPdf,
   getWorkoutPlans, saveWorkoutPlans, getWorkoutCheckins, checkInWorkout, extractWorkoutFromPdf, extractWorkoutFromImage,
+  getWorkoutLogs, saveExerciseSets, getExerciseHistory,
   uploadExerciseVideo, deleteExerciseVideo, exerciseVideoUrl,
   getAiKeys, saveApiKey, removeApiKey, hasAnyApiKey,
   getCachedInsights, saveCachedInsights,

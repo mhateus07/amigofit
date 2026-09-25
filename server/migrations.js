@@ -175,6 +175,30 @@ const MIGRATIONS = [
       ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    id: 4,
+    name: 'registro de séries realizadas (carga e repetições por exercício)',
+    sql: `
+      CREATE TABLE workout_set_logs (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        workout_plan_id TEXT NOT NULL,
+        exercise_id TEXT NOT NULL,
+        exercise_name TEXT NOT NULL,
+        date TEXT NOT NULL,
+        set_index INTEGER NOT NULL,
+        reps INTEGER,
+        load_kg NUMERIC(7,2),
+        completed_at BIGINT NOT NULL,
+        UNIQUE (user_id, workout_plan_id, exercise_id, date, set_index),
+        FOREIGN KEY (workout_plan_id, user_id) REFERENCES workout_plans (id, user_id)
+      );
+      -- Evolução por exercício é agrupada pelo nome (o mesmo exercício pode
+      -- estar em fichas diferentes).
+      CREATE INDEX workout_set_logs_exercise_idx ON workout_set_logs (user_id, lower(exercise_name), date);
+      CREATE INDEX workout_set_logs_day_idx ON workout_set_logs (user_id, date);
+    `,
+  },
 ];
 
 async function runMigrations(pool, migrations = MIGRATIONS) {

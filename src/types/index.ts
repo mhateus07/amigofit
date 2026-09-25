@@ -91,6 +91,21 @@ export interface WorkoutPlan {
   source: 'pdf' | 'photo' | 'manual';
 }
 
+// Uma série realizada (registro do que foi feito, não do planejado).
+export interface LoggedSet {
+  reps: number | null;
+  loadKg: number | null;
+}
+
+export interface ExerciseSessionHistory {
+  date: string; // 'YYYY-MM-DD'
+  maxLoadKg: number | null;
+  repsAtMax: number | null;
+  sets: number;
+  totalReps: number;
+  volumeKg: number;
+}
+
 export interface WorkoutCheckin {
   workoutPlanId: string;
   date: string; // 'YYYY-MM-DD'

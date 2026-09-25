@@ -21,6 +21,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { Exercise, WorkoutPlan, WorkoutCheckin } from '../types';
 import { useWorkoutPlan } from '../hooks/useWorkoutPlan';
+import WorkoutSessionModal from '../components/WorkoutSessionModal';
 import { storage, getToken, exerciseVideoUrl } from '../services/storage';
 import { errorMessage } from '../services/api';
 import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
@@ -183,6 +184,7 @@ function WorkoutCard({
   onEdit,
   onDelete,
   onViewVideo,
+  onStartSession,
 }: {
   plan: WorkoutPlan;
   checkin: WorkoutCheckin | null;
@@ -190,6 +192,7 @@ function WorkoutCard({
   onEdit: () => void;
   onDelete: () => void;
   onViewVideo: (videoId: string) => void;
+  onStartSession: () => void;
 }) {
   const borderColor = checkin?.status === 'done' ? colors.success : checkin?.status === 'skipped' ? colors.textMuted : colors.primary;
 
@@ -201,8 +204,12 @@ function WorkoutCard({
           {!!plan.dayLabel && <Text style={styles.cardDayLabel}>{plan.dayLabel}</Text>}
         </View>
         <View style={styles.cardActions}>
-          <TouchableOpacity onPress={onEdit}><Text style={styles.cardActionIcon}>✏️</Text></TouchableOpacity>
-          <TouchableOpacity onPress={onDelete}><Text style={styles.cardActionIcon}>🗑️</Text></TouchableOpacity>
+          <TouchableOpacity onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Editar ${plan.name}`} hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}>
+            <Text style={styles.cardActionIcon}>✏️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onDelete} accessibilityRole="button" accessibilityLabel={`Excluir ${plan.name}`} hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}>
+            <Text style={styles.cardActionIcon}>🗑️</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -213,12 +220,16 @@ function WorkoutCard({
             {!!exerciseSummary(e) && <Text style={styles.exerciseLineDetail}>{exerciseSummary(e)}</Text>}
           </View>
           {e.videoId && (
-            <TouchableOpacity style={styles.playBtn} onPress={() => onViewVideo(e.videoId!)}>
+            <TouchableOpacity style={styles.playBtn} onPress={() => onViewVideo(e.videoId!)} accessibilityRole="button" accessibilityLabel={`Ver vídeo de ${e.name}`}>
               <Text style={styles.playBtnText}>▶</Text>
             </TouchableOpacity>
           )}
         </View>
       ))}
+
+      <TouchableOpacity style={styles.sessionBtn} onPress={onStartSession} accessibilityRole="button">
+        <Text style={styles.sessionBtnText}>{checkin?.status === 'done' ? 'Ver/editar séries de hoje' : 'Registrar séries e cargas'}</Text>
+      </TouchableOpacity>
 
       {checkin ? (
         <View style={styles.statusBadge}>
@@ -409,7 +420,7 @@ function WorkoutReviewModal({
 }
 
 export default function TreinoScreen() {
-  const { plans, todayCheckins, isLoading, loadError, offline, pendingIds, savePlans, checkIn, refresh } = useWorkoutPlan();
+  const { plans, todayCheckins, isLoading, loadError, offline, pendingIds, savePlans, checkIn, refresh, today } = useWorkoutPlan();
   const [refreshing, setRefreshing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingPlan, setEditingPlan] = useState<WorkoutPlan | null>(null);
@@ -417,8 +428,22 @@ export default function TreinoScreen() {
   const [pdfDrafts, setPdfDrafts] = useState<WorkoutDraft[] | null>(null);
   const [editingDraftIndex, setEditingDraftIndex] = useState<number | null>(null);
   const [viewingVideoId, setViewingVideoId] = useState<string | null>(null);
+  const [sessionPlan, setSessionPlan] = useState<WorkoutPlan | null>(null);
 
   const onRefresh = async () => { setRefreshing(true); await refresh(); setRefreshing(false); };
+
+  const handleSessionFinished = () => {
+    const plan = sessionPlan;
+    setSessionPlan(null);
+    if (!plan || checkinFor(plan.id, todayCheckins)?.status === 'done') {
+      Alert.alert('Treino salvo', 'Séries e cargas registradas.');
+      return;
+    }
+    Alert.alert('Treino salvo', 'Marcar esta ficha como concluída hoje?', [
+      { text: 'Agora não', style: 'cancel' },
+      { text: 'Concluir ✅', onPress: () => handleCheckIn(plan.id, 'done') },
+    ]);
+  };
 
   const doneCount = todayCheckins.filter((c) => c.status === 'done').length;
 
@@ -569,6 +594,7 @@ export default function TreinoScreen() {
             onEdit={() => openEdit(item)}
             onDelete={() => handleDelete(item)}
             onViewVideo={setViewingVideoId}
+            onStartSession={() => setSessionPlan(item)}
           />
         )}
         contentContainerStyle={styles.list}
@@ -592,6 +618,14 @@ export default function TreinoScreen() {
             </View>
           ) : null
         }
+      />
+
+      <WorkoutSessionModal
+        visible={!!sessionPlan}
+        plan={sessionPlan}
+        date={today}
+        onClose={() => setSessionPlan(null)}
+        onFinished={handleSessionFinished}
       />
 
       <TouchableOpacity style={styles.fab} onPress={openAdd} activeOpacity={0.85} accessibilityRole="button" accessibilityLabel="Adicionar ficha de treino">
@@ -620,6 +654,8 @@ export default function TreinoScreen() {
 }
 
 const styles = StyleSheet.create({
+  sessionBtn: { marginTop: spacing.sm, minHeight: 44, borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  sessionBtnText: { color: colors.primary, fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   offlineBanner: { marginHorizontal: spacing.md, marginBottom: spacing.sm, padding: spacing.sm, borderRadius: radius.md, backgroundColor: '#FFF4E5' },
   offlineBannerText: { color: '#8A5300', fontSize: fontSize.sm },
   retryBtn: { marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, minHeight: 44, justifyContent: 'center' },

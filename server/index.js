@@ -71,6 +71,7 @@ app.use('/api', require('./routes/profile'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/extracted-data', require('./routes/extracted'));
 app.use('/api', require('./routes/plans'));
+app.use('/api/workout-logs', require('./routes/workoutLogs'));
 app.use('/api', media);
 // Por último: o rate limit de IA vale para as rotas deste router.
 app.use('/api', require('./routes/ai'));

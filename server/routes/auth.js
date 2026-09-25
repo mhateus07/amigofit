@@ -114,7 +114,7 @@ router.delete('/account', authLimiter, requireAuth, async (req, res) => {
     const videos = await db.query('SELECT filename FROM exercise_videos WHERE user_id=$1', [req.userId]);
     const images = await db.query('SELECT filename FROM chat_images WHERE user_id=$1', [req.userId]);
     for (const table of [
-      'meal_checkins', 'workout_checkins', 'extracted_data', 'messages', 'meals',
+      'meal_checkins', 'workout_checkins', 'workout_set_logs', 'extracted_data', 'messages', 'meals',
       'workout_plans', 'exercise_videos', 'chat_images', 'ai_keys', 'profiles',
     ]) {
       await db.query(`DELETE FROM ${table} WHERE user_id=$1`, [req.userId]);

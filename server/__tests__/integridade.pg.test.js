@@ -46,14 +46,14 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE meal_checkins, workout_checkins, extracted_data, messages, meals, workout_plans, ai_keys, profiles, chat_images RESTART IDENTITY`);
+  await pool.query(`TRUNCATE meal_checkins, workout_checkins, workout_set_logs, extracted_data, messages, meals, workout_plans, ai_keys, profiles, chat_images RESTART IDENTITY`);
 });
 
 describe('migrações', () => {
   it('são idempotentes (rodar de novo não falha nem reaplica)', async () => {
     await initDB();
     const { rows } = await pool.query('SELECT id FROM schema_migrations ORDER BY id');
-    expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining([1, 2, 3]));
+    expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining([1, 2, 3, 4]));
   });
 });
 
@@ -399,5 +399,39 @@ describe('sessões e conta', () => {
 describe('health', () => {
   it('confere o banco', async () => {
     await request(app).get('/health').expect(200, { ok: true });
+  });
+});
+
+describe('séries realizadas', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/workout-plans').set('Authorization', A)
+      .send({ plans: [{ id: 'w1', name: 'Treino A', exercises: [{ id: 'e1', name: 'Supino' }] }] }).expect(200);
+  });
+
+  it('grava as séries, substitui ao salvar de novo e calcula a evolução', async () => {
+    const put = (date, sets) => request(app).put('/api/workout-logs').set('Authorization', A)
+      .send({ workoutPlanId: 'w1', exerciseId: 'e1', exerciseName: 'Supino', date, sets });
+    await put('2026-09-10', [{ reps: 10, loadKg: 40 }, { reps: 8, loadKg: 45 }]).expect(200);
+    await put('2026-09-17', [{ reps: 10, loadKg: 45 }]).expect(200);
+    await put('2026-09-17', [{ reps: 10, loadKg: 45 }, { reps: 6, loadKg: 50 }]).expect(200);
+
+    const day = await request(app).get('/api/workout-logs?date=2026-09-17').set('Authorization', A);
+    expect(day.body.sets.map((s) => [s.setIndex, s.reps, s.loadKg])).toEqual([[0, 10, 45], [1, 6, 50]]);
+
+    const hist = await request(app).get('/api/workout-logs/history?exercise=supino').set('Authorization', A);
+    expect(hist.body.history).toEqual([
+      { date: '2026-09-17', maxLoadKg: 50, repsAtMax: 6, sets: 2, totalReps: 16, volumeKg: 750 },
+      { date: '2026-09-10', maxLoadKg: 45, repsAtMax: 8, sets: 2, totalReps: 18, volumeKg: 760 },
+    ]);
+  });
+
+  it('não aceita séries em ficha de outra conta nem mostra o histórico dela', async () => {
+    await request(app).put('/api/workout-logs').set('Authorization', B)
+      .send({ workoutPlanId: 'w1', exerciseId: 'e1', exerciseName: 'Supino', date: '2026-09-10', sets: [{ reps: 1, loadKg: 1 }] })
+      .expect(404);
+    await request(app).put('/api/workout-logs').set('Authorization', A)
+      .send({ workoutPlanId: 'w1', exerciseId: 'e1', exerciseName: 'Supino', date: '2026-09-10', sets: [{ reps: 10, loadKg: 40 }] });
+    const hist = await request(app).get('/api/workout-logs/history?exercise=Supino').set('Authorization', B);
+    expect(hist.body.history).toEqual([]);
   });
 });
