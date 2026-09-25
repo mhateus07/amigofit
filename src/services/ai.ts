@@ -1,7 +1,7 @@
 import { Message, UserProfile, ExtractedData, AiInsight } from '../types';
 import { format, subDays, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { API_BASE, authHeaders, authHeadersForTranscription } from './storage';
+import { apiRequest, AI_TIMEOUT_MS } from './api';
 
 function buildDiaryContext(diaryData: ExtractedData[]): string {
   if (diaryData.length === 0) return '';
@@ -24,7 +24,10 @@ function buildDiaryContext(diaryData: ExtractedData[]): string {
 
   Object.entries(byCategory).forEach(([cat, entries]) => {
     lines.push(`\n${categoryLabels[cat] || cat.toUpperCase()}:`);
-    entries.slice(-6).forEach((e) => {
+    // Os 6 mais recentes, exibidos em ordem cronológica. O servidor devolve
+    // o Diário do mais novo para o mais antigo, então slice(-6) sem ordenar
+    // pegava os 6 MAIS ANTIGOS da janela.
+    [...entries].sort((a, b) => a.timestamp - b.timestamp).slice(-6).forEach((e) => {
       const date = format(e.timestamp, "dd/MM 'às' HH:mm", { locale: ptBR });
       lines.push(`  • ${date} — ${e.label}: ${e.value}`);
     });
@@ -104,70 +107,41 @@ export class AIService {
     }
 
     const systemPrompt = buildSystemPrompt(profile, diaryData);
-
-    const res = await fetch(`${API_BASE}/api/chat`, {
+    const data = await apiRequest<{ text: string }>('/api/chat', {
       method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ messages: formatted, systemPrompt }),
+      body: { messages: formatted, systemPrompt },
+      timeoutMs: AI_TIMEOUT_MS,
     });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      throw new Error(data.error || 'Erro na API');
-    }
-    const data = await res.json();
     return data.text;
   }
 
-  async extractData(userMessage: string): Promise<ExtractedData[]> {
-    try {
-      const res = await fetch(`${API_BASE}/api/extract`, {
-        method: 'POST',
-        headers: await authHeaders(),
-        body: JSON.stringify({ message: userMessage }),
-      });
-      const data = await res.json();
-      const now = Date.now();
-      return (data.data || []).map((item: Omit<ExtractedData, 'timestamp'>) => ({
-        ...item,
-        timestamp: now,
-      }));
-    } catch {
-      return [];
-    }
+  // Com messageId, o servidor grava os dados extraídos vinculados à mensagem
+  // (idempotente) e já os devolve salvos — não é preciso gravar de novo.
+  async extractData(userMessage: string, messageId?: string): Promise<ExtractedData[]> {
+    const data = await apiRequest<{ data: ExtractedData[] }>('/api/extract', {
+      method: 'POST',
+      body: { message: userMessage, messageId },
+      timeoutMs: AI_TIMEOUT_MS,
+    });
+    return data.data;
   }
 
   async transcribeAudio(audioBase64: string, mimeType: string): Promise<string> {
-    const headers = await authHeadersForTranscription();
-    if (!headers) {
-      throw new Error('Nenhuma chave de IA compatível com transcrição encontrada. Configure OpenAI, Groq ou Gemini em Perfil → Configuração da IA.');
-    }
-
-    const res = await fetch(`${API_BASE}/api/transcribe`, {
+    // O servidor escolhe um provedor com chave que transcreva (Groq, OpenAI ou Gemini).
+    const data = await apiRequest<{ text: string }>('/api/transcribe', {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ audioBase64, mimeType }),
+      body: { audioBase64, mimeType },
+      timeoutMs: AI_TIMEOUT_MS,
     });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      throw new Error(data.error || 'Erro ao transcrever áudio');
-    }
-    const data = await res.json();
     return data.text || '';
   }
 
   async generateInsights(data: ExtractedData[], profile: UserProfile | null): Promise<AiInsight[]> {
-    const res = await fetch(`${API_BASE}/api/insights`, {
+    const resData = await apiRequest<{ insights: AiInsight[] }>('/api/insights', {
       method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ data, profile }),
+      body: { data, profile },
+      timeoutMs: AI_TIMEOUT_MS,
     });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      throw new Error(errData.error || 'Erro ao gerar insights');
-    }
-    const resData = await res.json();
     return resData.insights || [];
   }
 }

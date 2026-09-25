@@ -10,21 +10,23 @@ import {
   ActivityIndicator,
   Platform,
   Switch,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UserProfile, AIProvider } from '../types';
-import { storage, getProvider, saveProvider } from '../services/storage';
+import { storage, AiKeyStatus } from '../services/storage';
+import { errorMessage } from '../services/api';
 import { reprocessHistory } from '../services/reprocess';
 import { syncHealthConnect, getLastSyncTime } from '../services/healthConnect';
 import { syncAppleHealth, getLastAppleHealthSyncTime } from '../services/appleHealth';
 import { scheduleWorkoutReminder, cancelWorkoutReminder } from '../services/reminders';
-import { colors, spacing, radius, fontSize } from '../constants/theme';
+import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
 
 const PROVIDER_INFO: Record<AIProvider, { label: string; icon: string; prefix: string; hint: string; model: string }> = {
   anthropic: { label: 'Anthropic', icon: '🟣', prefix: 'sk-ant-', hint: 'console.anthropic.com', model: 'Claude Sonnet' },
   openai:    { label: 'OpenAI',    icon: '🟢', prefix: 'sk-',     hint: 'platform.openai.com',  model: 'GPT-4o' },
-  groq:      { label: 'Groq',      icon: '⚡',  prefix: 'gsk_',    hint: 'console.groq.com',     model: 'Llama 3.3 70B' },
-  gemini:    { label: 'Gemini',    icon: '🔵', prefix: 'AIza',    hint: 'aistudio.google.com',  model: 'Gemini 1.5 Flash' },
+  groq:      { label: 'Groq',      icon: '⚡',  prefix: 'gsk_',    hint: 'console.groq.com',     model: 'GPT-OSS 20B' },
+  gemini:    { label: 'Gemini',    icon: '🔵', prefix: 'AIza',    hint: 'aistudio.google.com',  model: 'Gemini 2.5 Flash' },
 };
 
 const PROVIDERS = Object.keys(PROVIDER_INFO) as AIProvider[];
@@ -48,6 +50,69 @@ const LEVELS = [
   { value: 'intermediate', label: 'Intermediário' },
   { value: 'advanced', label: 'Avançado' },
 ] as const;
+
+// Pede senha (e opcionalmente uma nova) — Alert.prompt só existe no iOS.
+function PasswordModal({
+  visible, title, confirmLabel, askNew, destructive, onClose, onConfirm,
+}: {
+  visible: boolean;
+  title: string;
+  confirmLabel: string;
+  askNew?: boolean;
+  destructive?: boolean;
+  onClose: () => void;
+  onConfirm: (current: string, next: string) => Promise<void>;
+}) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { if (!visible) { setCurrent(''); setNext(''); } }, [visible]);
+
+  const submit = async () => {
+    if (!current || (askNew && next.length < 6)) {
+      Alert.alert('Preencha os campos', askNew ? 'A nova senha precisa ter pelo menos 6 caracteres.' : 'Digite sua senha.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await onConfirm(current, next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>{title}</Text>
+          <Text style={styles.label}>Senha atual</Text>
+          <TextInput style={styles.input} value={current} onChangeText={setCurrent} secureTextEntry autoCapitalize="none" accessibilityLabel="Senha atual" />
+          {askNew && (
+            <>
+              <Text style={styles.label}>Nova senha</Text>
+              <TextInput style={styles.input} value={next} onChangeText={setNext} secureTextEntry autoCapitalize="none" accessibilityLabel="Nova senha" />
+            </>
+          )}
+          <View style={styles.modalActions}>
+            <TouchableOpacity style={styles.modalCancel} onPress={onClose} disabled={busy} accessibilityRole="button">
+              <Text style={styles.modalCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalConfirm, destructive && { backgroundColor: colors.error }]}
+              onPress={submit}
+              disabled={busy}
+              accessibilityRole="button"
+            >
+              {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalConfirmText}>{confirmLabel}</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 function SectionHeader({ title }: { title: string }) {
   return <Text style={styles.sectionTitle}>{title}</Text>;
@@ -87,13 +152,15 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
   const [notificationTime, setNotificationTime] = useState(profile?.notificationTime ?? '19:00');
   const [reminderSaving, setReminderSaving] = useState(false);
 
-  // Provider & keys
-  const [provider, setProvider] = useState<AIProvider>('anthropic');
-  const [providerKeys, setProviderKeys] = useState<Record<AIProvider, string>>({
-    anthropic: '', openai: '', gemini: '', groq: '',
-  });
+  // Provider & keys — as chaves ficam no servidor; aqui só sabemos quais
+  // provedores têm chave (e os 4 últimos caracteres).
+  const [provider, setProvider] = useState<AIProvider>(profile?.aiProvider ?? 'anthropic');
+  const [aiKeys, setAiKeys] = useState<AiKeyStatus>({});
+  const [keysError, setKeysError] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
+  const [passwordModal, setPasswordModal] = useState<'change' | 'delete' | null>(null);
 
   const [reprocessing, setReprocessing] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState('');
@@ -102,17 +169,18 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
   const [appleHealthSyncing, setAppleHealthSyncing] = useState(false);
   const [appleHealthLastSync, setAppleHealthLastSync] = useState<Date | null>(null);
 
+  const loadKeys = async () => {
+    try {
+      setAiKeys(await storage.getAiKeys(true));
+      setKeysError(null);
+    } catch (e) {
+      setKeysError(errorMessage(e));
+    }
+  };
+
   useEffect(() => {
+    loadKeys();
     (async () => {
-      const p = await getProvider();
-      setProvider(p);
-      const [k1, k2, k3, k4] = await Promise.all([
-        storage.getApiKey('anthropic'),
-        storage.getApiKey('openai'),
-        storage.getApiKey('gemini'),
-        storage.getApiKey('groq'),
-      ]);
-      setProviderKeys({ anthropic: k1 ?? '', openai: k2 ?? '', gemini: k3 ?? '', groq: k4 ?? '' });
       if (Platform.OS === 'android') {
         const lastSync = await getLastSyncTime();
         setHealthLastSync(lastSync);
@@ -124,26 +192,24 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
     })();
   }, []);
 
-  // Guarda o provedor/chave também no perfil sincronizado pelo servidor
-  // (mesmo mecanismo já usado por nome/objetivo/etc.), pra não precisar
-  // reconfigurar a chave da IA a cada reinstalação ou novo aparelho.
-  const persistAiConfig = async (updates: { aiProvider?: AIProvider; aiApiKeys?: Partial<Record<AIProvider, string>> }) => {
-    if (!profile) return;
-    const updated: UserProfile = {
-      ...profile,
-      ...updates,
-      aiApiKeys: { ...profile.aiApiKeys, ...updates.aiApiKeys },
-    };
-    onProfileUpdate(updated);
-    await storage.saveProfile(updated);
+  // Grava campos do perfil no servidor (merge) e só então atualiza o app.
+  const persistProfile = async (updates: Partial<UserProfile>): Promise<boolean> => {
+    try {
+      const saved = await storage.saveProfile(updates);
+      onProfileUpdate(saved);
+      return true;
+    } catch (e) {
+      Alert.alert('Não foi possível salvar', errorMessage(e));
+      return false;
+    }
   };
 
   const handleProviderChange = async (p: AIProvider) => {
+    const previous = provider;
     setProvider(p);
-    await saveProvider(p);
-    await persistAiConfig({ aiProvider: p });
     setShowKeyInput(false);
     setEditingKey('');
+    if (!(await persistProfile({ aiProvider: p }))) setProvider(previous);
   };
 
   const saveProviderKey = async () => {
@@ -153,17 +219,86 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
       Alert.alert('Chave inválida', `A chave deve começar com "${info.prefix}". Acesse ${info.hint}`);
       return;
     }
-    await Promise.all([storage.saveApiKey(key, provider), saveProvider(provider)]);
-    setProviderKeys(prev => ({ ...prev, [provider]: key }));
-    await persistAiConfig({ aiProvider: provider, aiApiKeys: { [provider]: key } });
-    setEditingKey('');
-    setShowKeyInput(false);
-    Alert.alert('Chave salva!', `${info.label} configurado com ${info.model}.`);
+    setSavingKey(true);
+    try {
+      setAiKeys(await storage.saveApiKey(provider, key));
+      await persistProfile({ aiProvider: provider });
+      setEditingKey('');
+      setShowKeyInput(false);
+      Alert.alert('Chave salva!', `${info.label} configurado com ${info.model}.`);
+    } catch (e) {
+      Alert.alert('Não foi possível salvar a chave', errorMessage(e));
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
+  const removeProviderKey = async (p: AIProvider) => {
+    try {
+      const keys = await storage.removeApiKey(p);
+      setAiKeys(keys);
+      if (provider === p) {
+        const fallback = PROVIDERS.find((x) => x !== p && !!keys[x]) || 'anthropic';
+        setProvider(fallback);
+        await persistProfile({ aiProvider: fallback });
+      }
+    } catch (e) {
+      Alert.alert('Não foi possível remover a chave', errorMessage(e));
+    }
+  };
+
+  const handleChangePassword = async (current: string, next: string) => {
+    try {
+      await storage.changePassword(current, next);
+      setPasswordModal(null);
+      Alert.alert('Senha alterada', 'Os outros aparelhos conectados precisarão entrar de novo.');
+    } catch (e) {
+      Alert.alert('Não foi possível alterar a senha', errorMessage(e));
+    }
+  };
+
+  const handleLogoutAll = () => {
+    Alert.alert('Sair de todos os aparelhos', 'Encerra a sessão em todos os aparelhos, inclusive este.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Sair de todos',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await storage.logoutAllDevices();
+            onLogout();
+          } catch (e) {
+            Alert.alert('Não foi possível encerrar as sessões', errorMessage(e));
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleDeleteAccount = async (current: string) => {
+    try {
+      await storage.deleteAccount(current);
+      setPasswordModal(null);
+      onLogout();
+      Alert.alert('Conta excluída', 'Sua conta e todos os seus dados foram apagados.');
+    } catch (e) {
+      Alert.alert('Não foi possível excluir a conta', errorMessage(e));
+    }
+  };
+
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      'Excluir conta',
+      'Isso apaga definitivamente sua conta, conversas, diário, planos, vídeos e chaves de IA. Não dá para desfazer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Continuar', style: 'destructive', onPress: () => setPasswordModal('delete') },
+      ]
+    );
   };
 
   const handleReprocess = async () => {
-    const hasKey = await storage.hasAnyApiKey();
-    if (!hasKey) {
+    if (Object.keys(aiKeys).length === 0) {
       Alert.alert('Chave não configurada', 'Configure a chave de um provedor de IA primeiro.');
       return;
     }
@@ -174,11 +309,12 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
         setReprocessProgress(`Processando ${current}/${total} mensagens...`);
       });
       if (result.error) {
-        Alert.alert('Servidor offline', result.error);
-      } else if (result.processed === 0) {
+        Alert.alert('Não foi possível reprocessar', result.error);
+      } else if (result.processed === 0 && result.failed === 0) {
         Alert.alert('Tudo atualizado', 'Todas as mensagens já foram processadas.');
       } else {
-        Alert.alert('Concluído!', `${result.processed} mensagem(s) analisada(s).\n${result.dataPoints} dado(s) salvo(s) no Diário e Insights.`);
+        const failedText = result.failed ? `\n${result.failed} mensagem(s) falharam — tente de novo depois.` : '';
+        Alert.alert('Concluído!', `${result.processed} mensagem(s) analisada(s).\n${result.dataPoints} dado(s) salvo(s) no Diário e Insights.${failedText}`);
       }
     } catch {
       Alert.alert('Erro', 'Não foi possível reprocessar o histórico.');
@@ -231,10 +367,7 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
   };
 
   const persistNotificationSettings = async (enabled: boolean, time: string) => {
-    if (!profile) return;
-    const updated: UserProfile = { ...profile, notificationEnabled: enabled, notificationTime: time };
-    onProfileUpdate(updated);
-    await storage.saveProfile(updated);
+    await persistProfile({ notificationEnabled: enabled, notificationTime: time });
   };
 
   const handleToggleReminder = async (value: boolean) => {
@@ -288,25 +421,28 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
       Alert.alert('Nome obrigatório', 'Por favor, insira seu nome.');
       return;
     }
-    const updated: UserProfile = {
+    // null apaga o campo no servidor (campos omitidos são mantidos).
+    const num = (v: string, parse: (x: string) => number) => {
+      const n = parse(v.replace(',', '.'));
+      return v && Number.isFinite(n) ? n : null;
+    };
+    const ok = await persistProfile({
       name: name.trim(),
       goal,
       level,
-      age: age ? parseInt(age, 10) : undefined,
-      weight: weight ? parseFloat(weight) : undefined,
-      height: height ? parseInt(height, 10) : undefined,
+      age: num(age, (x) => parseInt(x, 10)) as number | undefined,
+      weight: num(weight, parseFloat) as number | undefined,
+      height: num(height, (x) => parseInt(x, 10)) as number | undefined,
       weeklyWorkoutGoal,
       sleepGoal,
       notificationEnabled,
       notificationTime,
       onboardingComplete: true,
-    };
-    await storage.saveProfile(updated);
-    onProfileUpdate(updated);
-    Alert.alert('Salvo!', 'Perfil atualizado com sucesso.');
+    });
+    if (ok) Alert.alert('Salvo!', 'Perfil atualizado com sucesso.');
   };
 
-  const activeProviderKey = providerKeys[provider];
+  const activeProviderKey = aiKeys[provider];
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -325,24 +461,62 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
                 <Text style={styles.userEmail}>{authUser.email}</Text>
               </View>
             </View>
-            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} accessibilityRole="button">
               <Text style={styles.logoutBtnText}>Sair da conta</Text>
             </TouchableOpacity>
           </View>
         )}
 
+        {/* Conta e segurança */}
+        {authUser && (
+          <View style={styles.section}>
+            <SectionHeader title="Conta e segurança" />
+            <TouchableOpacity style={styles.accountRow} onPress={() => setPasswordModal('change')} accessibilityRole="button">
+              <Text style={styles.accountRowText}>Alterar senha</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.accountRow} onPress={handleLogoutAll} accessibilityRole="button">
+              <Text style={styles.accountRowText}>Sair de todos os aparelhos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.accountRow} onPress={confirmDeleteAccount} accessibilityRole="button">
+              <Text style={[styles.accountRowText, { color: colors.error }]}>Excluir conta e todos os dados</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <PasswordModal
+          visible={passwordModal === 'change'}
+          title="Alterar senha"
+          confirmLabel="Alterar"
+          askNew
+          onClose={() => setPasswordModal(null)}
+          onConfirm={handleChangePassword}
+        />
+        <PasswordModal
+          visible={passwordModal === 'delete'}
+          title="Confirme sua senha para excluir a conta"
+          confirmLabel="Excluir"
+          destructive
+          onClose={() => setPasswordModal(null)}
+          onConfirm={(current) => handleDeleteAccount(current)}
+        />
+
         {/* Configuração da IA */}
         <View style={styles.section}>
           <SectionHeader title="Configuração da IA" />
           <Text style={styles.sectionDesc}>
-            Toque para trocar de provedor. Segure para remover a chave.
+            Toque para trocar de provedor. Segure para remover a chave. As chaves ficam guardadas criptografadas no servidor e nunca voltam para o app.
           </Text>
+          {keysError && (
+            <TouchableOpacity onPress={loadKeys} accessibilityRole="button">
+              <Text style={styles.keysError}>Não foi possível carregar as chaves: {keysError}. Tocar para tentar de novo.</Text>
+            </TouchableOpacity>
+          )}
 
           {/* Provider selector */}
           <View style={styles.providerGrid}>
             {PROVIDERS.map((p) => {
               const info = PROVIDER_INFO[p];
-              const hasKey = !!providerKeys[p];
+              const hasKey = !!aiKeys[p];
               const isActive = provider === p;
               return (
                 <TouchableOpacity
@@ -350,32 +524,19 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
                   style={[styles.providerCard, isActive && styles.providerCardActive, !hasKey && styles.providerCardNoKey]}
                   onPress={() => handleProviderChange(p)}
                   onLongPress={() => {
-                    if (!providerKeys[p]) return;
+                    if (!aiKeys[p]) return;
                     Alert.alert(
                       `Remover chave — ${info.label}`,
                       'Isso vai desativar este provedor.',
                       [
                         { text: 'Cancelar', style: 'cancel' },
-                        {
-                          text: 'Remover',
-                          style: 'destructive',
-                          onPress: async () => {
-                            await storage.saveApiKey('', p);
-                            setProviderKeys(prev => ({ ...prev, [p]: '' }));
-                            if (provider === p) {
-                              const next = PROVIDERS.find(x => x !== p && !!providerKeys[x]);
-                              const fallback = next || 'anthropic';
-                              setProvider(fallback);
-                              await saveProvider(fallback);
-                              await persistAiConfig({ aiProvider: fallback, aiApiKeys: { [p]: '' } });
-                            } else {
-                              await persistAiConfig({ aiApiKeys: { [p]: '' } });
-                            }
-                          },
-                        },
+                        { text: 'Remover', style: 'destructive', onPress: () => removeProviderKey(p) },
                       ]
                     );
                   }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${info.label}${isActive ? ', em uso' : ''}${hasKey ? ', chave configurada' : ', sem chave'}`}
+                  accessibilityHint="Toque para usar este provedor. Segure para remover a chave."
                   activeOpacity={0.75}
                   delayLongPress={500}
                 >
@@ -401,7 +562,7 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
                 <Text style={styles.apiKeyActiveIcon}>✓</Text>
                 <View>
                   <Text style={styles.apiKeyActiveText}>{PROVIDER_INFO[provider].label} configurado</Text>
-                  <Text style={styles.apiKeyActiveModel}>{PROVIDER_INFO[provider].model}</Text>
+                  <Text style={styles.apiKeyActiveModel}>{PROVIDER_INFO[provider].model} · chave terminada em {activeProviderKey.last4}</Text>
                 </View>
               </View>
               <TouchableOpacity onPress={() => setShowKeyInput(true)} style={styles.changeKeyBtn}>
@@ -425,8 +586,8 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
-                <TouchableOpacity style={styles.saveKeyBtn} onPress={saveProviderKey}>
-                  <Text style={styles.saveKeyBtnText}>Salvar</Text>
+                <TouchableOpacity style={styles.saveKeyBtn} onPress={saveProviderKey} disabled={savingKey} accessibilityRole="button">
+                  <Text style={styles.saveKeyBtnText}>{savingKey ? '...' : 'Salvar'}</Text>
                 </TouchableOpacity>
               </View>
             </>
@@ -646,6 +807,17 @@ export default function ProfileScreen({ profile, authUser, onProfileUpdate, onLo
 }
 
 const styles = StyleSheet.create({
+  keysError: { color: colors.error, fontSize: fontSize.sm, marginBottom: spacing.sm },
+  accountRow: { paddingVertical: spacing.md, minHeight: 44, justifyContent: 'center', borderBottomWidth: 1, borderBottomColor: colors.border },
+  accountRowText: { color: colors.text, fontSize: fontSize.md, fontFamily: fontFamily.medium },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.lg },
+  modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg },
+  modalTitle: { color: colors.text, fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, marginBottom: spacing.sm },
+  modalActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
+  modalCancel: { flex: 1, minHeight: 44, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border },
+  modalCancelText: { color: colors.textSecondary, fontFamily: fontFamily.semiBold },
+  modalConfirm: { flex: 1, minHeight: 44, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary },
+  modalConfirmText: { color: '#fff', fontFamily: fontFamily.semiBold },
   container: { flex: 1, backgroundColor: colors.background },
   scroll: { padding: spacing.md, paddingBottom: spacing.xxl },
   title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700', marginBottom: spacing.lg },

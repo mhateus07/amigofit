@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -17,9 +18,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { format, isToday, isYesterday, startOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { ExtractedData } from '../types';
+import { ExtractedData, ExtractedSource } from '../types';
 import { storage } from '../services/storage';
-import { colors, spacing, radius, fontSize } from '../constants/theme';
+import { errorMessage, isStaleSession } from '../services/api';
+import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
 import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../constants/categories';
 
 const { width } = Dimensions.get('window');
@@ -58,17 +60,35 @@ function CategoryBadge({ category }: { category: ExtractedData['category'] }) {
   );
 }
 
-function DataCard({ item }: { item: ExtractedData }) {
+// De onde veio cada registro — ajuda a entender uma extração errada da IA.
+const SOURCE_LABELS: Record<ExtractedSource, string> = {
+  chat: 'Extraído pela IA do chat',
+  manual: 'Adicionado manualmente',
+  apple_health: 'Apple Saúde',
+  health_connect: 'Health Connect',
+  meal_checkin: 'Check-in da dieta',
+  workout_checkin: 'Check-in do treino',
+};
+
+function DataCard({ item, onPress }: { item: ExtractedData; onPress: () => void }) {
   const cfg = CATEGORY_CONFIG[item.category];
+  const source = item.source ? SOURCE_LABELS[item.source] : null;
   return (
-    <View style={[styles.card, { borderLeftColor: cfg.color }]}>
+    <TouchableOpacity
+      style={[styles.card, { borderLeftColor: cfg.color }]}
+      onPress={onPress}
+      activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={`${cfg.label}: ${item.label}, ${item.value}. Tocar para corrigir ou excluir`}
+    >
       <View style={styles.cardTop}>
         <CategoryBadge category={item.category} />
         <Text style={styles.cardTime}>{format(item.timestamp, 'HH:mm')}</Text>
       </View>
       <Text style={styles.cardValue}>{item.label}: <Text style={[styles.cardValueBold, { color: cfg.color }]}>{item.value}</Text></Text>
       {!!item.rawText && <Text style={styles.cardRaw}>"{item.rawText}"</Text>}
-    </View>
+      {source && <Text style={styles.cardSource}>{source}</Text>}
+    </TouchableOpacity>
   );
 }
 
@@ -110,27 +130,41 @@ function StatsBar({ data }: { data: ExtractedData[] }) {
   );
 }
 
-function AddEntryModal({
+function EntryModal({
   visible,
+  initial,
   onClose,
   onSave,
 }: {
   visible: boolean;
+  initial: ExtractedData | null;
   onClose: () => void;
-  onSave: (entry: Omit<ExtractedData, 'timestamp'>) => void;
+  // Resolve true se salvou; em caso de falha o modal continua aberto.
+  onSave: (entry: Pick<ExtractedData, 'category' | 'label' | 'value'>) => Promise<boolean>;
 }) {
   const [category, setCategory] = useState<ExtractedData['category']>('workout');
   const [label, setLabel] = useState('');
   const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    setCategory(initial?.category ?? 'workout');
+    setLabel(initial?.label ?? '');
+    setValue(initial?.value ?? '');
+  }, [visible, initial]);
 
   const reset = () => { setCategory('workout'); setLabel(''); setValue(''); };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!label.trim() || !value.trim()) {
       Alert.alert('Campos obrigatórios', 'Preencha o nome e o valor do registro.');
       return;
     }
-    onSave({ category, label: label.trim(), value: value.trim(), rawText: '' });
+    setSaving(true);
+    const ok = await onSave({ category, label: label.trim(), value: value.trim() });
+    setSaving(false);
+    if (!ok) return;
     reset();
     onClose();
   };
@@ -145,7 +179,7 @@ function AddEntryModal({
       >
         <View style={styles.modalSheet}>
           <View style={styles.modalHandle} />
-          <Text style={styles.modalTitle}>Novo registro</Text>
+          <Text style={styles.modalTitle}>{initial ? 'Corrigir registro' : 'Novo registro'}</Text>
 
           <Text style={styles.modalLabel}>Categoria</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
@@ -203,8 +237,8 @@ function AddEntryModal({
             <TouchableOpacity style={styles.cancelBtn} onPress={handleClose}>
               <Text style={styles.cancelBtnText}>Cancelar</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-              <Text style={styles.saveBtnText}>Salvar</Text>
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={saving}>
+              <Text style={styles.saveBtnText}>{saving ? 'Salvando...' : 'Salvar'}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -217,21 +251,74 @@ export default function DiaryScreen() {
   const [allData, setAllData] = useState<ExtractedData[]>([]);
   const [filter, setFilter] = useState('Todos');
   const [refreshing, setRefreshing] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [editing, setEditing] = useState<ExtractedData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
-    const data = await storage.getExtractedData();
-    setAllData(data.sort((a, b) => b.timestamp - a.timestamp));
+    try {
+      const data = await storage.getExtractedData();
+      // Ignora categorias desconhecidas em vez de quebrar a tela.
+      setAllData(data.filter((d) => CATEGORY_CONFIG[d.category]).sort((a, b) => b.timestamp - a.timestamp));
+      setLoadError(null);
+    } catch (e) {
+      if (!isStaleSession(e)) setLoadError(errorMessage(e));
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
-  useEffect(() => { load(); }, []);
+  // Recarrega sempre que a aba ganha foco: registros novos do chat, dos
+  // check-ins ou do Apple Saúde aparecem sem precisar puxar para atualizar.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
-  const handleSaveEntry = async (entry: Omit<ExtractedData, 'timestamp'>) => {
-    const newEntry: ExtractedData = { ...entry, timestamp: Date.now() };
-    await storage.addExtractedData([newEntry]);
-    setAllData(prev => [newEntry, ...prev]);
+  const openAdd = () => { setEditing(null); setModalVisible(true); };
+
+  const handleSaveEntry = async (entry: Pick<ExtractedData, 'category' | 'label' | 'value'>): Promise<boolean> => {
+    try {
+      if (editing?.id) {
+        const updated = await storage.updateExtractedData(editing.id, entry);
+        setAllData((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+      } else {
+        const newEntry: ExtractedData = { ...entry, rawText: '', timestamp: Date.now(), source: 'manual' };
+        const [id] = await storage.addExtractedData([newEntry]);
+        setAllData((prev) => [{ ...newEntry, id }, ...prev]);
+      }
+      return true;
+    } catch (e) {
+      Alert.alert('Não foi possível salvar', errorMessage(e));
+      return false;
+    }
+  };
+
+  const handleDelete = (item: ExtractedData) => {
+    Alert.alert('Excluir registro', `Remover "${item.label}: ${item.value}" do Diário?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Excluir',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await storage.deleteExtractedData(item.id!);
+            setAllData((prev) => prev.filter((d) => d.id !== item.id));
+          } catch (e) {
+            Alert.alert('Não foi possível excluir', errorMessage(e));
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleCardPress = (item: ExtractedData) => {
+    if (!item.id) return;
+    Alert.alert(item.label, item.value, [
+      { text: 'Corrigir', onPress: () => { setEditing(item); setModalVisible(true); } },
+      { text: 'Excluir', style: 'destructive', onPress: () => handleDelete(item) },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
   };
 
   const filtered = filter === 'Todos' ? allData : allData.filter((d) => d.category === FILTER_MAP[filter]);
@@ -267,7 +354,7 @@ export default function DiaryScreen() {
       <FlatList
         data={listData}
         keyExtractor={(item, i) => {
-          if (item.type === 'card') return `${item.item.timestamp}_${i}`;
+          if (item.type === 'card') return item.item.id ? `d_${item.item.id}` : `${item.item.timestamp}_${i}`;
           return `${item.type}_${i}`;
         }}
         renderItem={({ item }) => {
@@ -281,6 +368,8 @@ export default function DiaryScreen() {
                 <TouchableOpacity
                   style={[styles.filterBtn, filter === f && styles.filterBtnActive]}
                   onPress={() => setFilter(f)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: filter === f }}
                 >
                   <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>{f}</Text>
                 </TouchableOpacity>
@@ -298,7 +387,18 @@ export default function DiaryScreen() {
               </View>
             );
           }
-          if (item.type === 'card') return <DataCard item={item.item} />;
+          if (item.type === 'card') return <DataCard item={item.item} onPress={() => handleCardPress(item.item)} />;
+          if (loadError) return (
+            <View style={styles.empty}>
+              <Text style={styles.emptyIcon}>⚠️</Text>
+              <Text style={styles.emptyText}>Não foi possível carregar o Diário</Text>
+              <Text style={styles.emptySubtext}>{loadError}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={load} accessibilityRole="button">
+                <Text style={styles.retryBtnText}>Tentar de novo</Text>
+              </TouchableOpacity>
+            </View>
+          );
+          if (!loaded) return null;
           return (
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>📋</Text>
@@ -313,13 +413,14 @@ export default function DiaryScreen() {
       />
 
       {/* FAB */}
-      <TouchableOpacity style={styles.fab} onPress={() => setShowAddModal(true)} activeOpacity={0.85}>
+      <TouchableOpacity style={styles.fab} onPress={openAdd} activeOpacity={0.85} accessibilityRole="button" accessibilityLabel="Adicionar registro">
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
-      <AddEntryModal
-        visible={showAddModal}
-        onClose={() => setShowAddModal(false)}
+      <EntryModal
+        visible={modalVisible}
+        initial={editing}
+        onClose={() => { setModalVisible(false); setEditing(null); }}
         onSave={handleSaveEntry}
       />
     </SafeAreaView>
@@ -358,6 +459,9 @@ const styles = StyleSheet.create({
   cardTime:    { color: colors.textMuted, fontSize: fontSize.xs },
   cardValue:   { color: colors.textSecondary, fontSize: fontSize.sm, marginBottom: 4 },
   cardValueBold: { fontWeight: '700' },
+  cardSource:  { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4 },
+  retryBtn:    { marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, minHeight: 44, justifyContent: 'center' },
+  retryBtnText: { color: '#fff', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   cardRaw:     { color: colors.textMuted, fontSize: fontSize.xs, fontStyle: 'italic' },
   empty:       { alignItems: 'center', paddingTop: spacing.xxl },
   emptyIcon:   { fontSize: 48, marginBottom: spacing.md },

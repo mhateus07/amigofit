@@ -19,6 +19,8 @@ import { ptBR } from 'date-fns/locale';
 import * as ImagePicker from 'expo-image-picker';
 import { Message, UserProfile } from '../types';
 import { useChat } from '../hooks/useChat';
+import { chatImageUrl, getToken } from '../services/storage';
+import { errorMessage } from '../services/api';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { calculateStreak } from '../utils/streak';
 import { colors, spacing, radius, fontSize, fontFamily, shadow } from '../constants/theme';
@@ -67,7 +69,7 @@ function AIText({ content }: { content: string }) {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ message, token, onRetry }: { message: Message; token: string | null; onRetry: (id: string) => void }) {
   const isUser = message.role === 'user';
   const time = format(message.timestamp, 'HH:mm', { locale: ptBR });
 
@@ -97,11 +99,18 @@ function MessageBubble({ message }: { message: Message }) {
         activeOpacity={1}
         delayLongPress={400}
       >
-        {message.imageUri && (
-          <Image source={{ uri: message.imageUri }} style={styles.bubbleImage} resizeMode="cover" />
-        )}
+        {message.imageUri ? (
+          <Image source={{ uri: message.imageUri }} style={styles.bubbleImage} resizeMode="cover" accessibilityLabel="Imagem enviada" />
+        ) : message.imageId && token ? (
+          <Image
+            source={{ uri: chatImageUrl(message.imageId), headers: { Authorization: `Bearer ${token}` } }}
+            style={styles.bubbleImage}
+            resizeMode="cover"
+            accessibilityLabel="Imagem enviada"
+          />
+        ) : null}
         {isUser ? (
-          message.content !== '📷 Imagem enviada' || !message.imageUri
+          message.content !== '📷 Imagem enviada' || !(message.imageUri || message.imageId)
             ? <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{message.content}</Text>
             : null
         ) : (
@@ -112,6 +121,16 @@ function MessageBubble({ message }: { message: Message }) {
           <View style={styles.dataTag}>
             <Text style={styles.dataTagText}>+{message.extractedData.length} dado(s) salvo(s)</Text>
           </View>
+        )}
+        {message.saveFailed && (
+          <TouchableOpacity
+            style={styles.saveFailed}
+            onPress={() => onRetry(message.id)}
+            accessibilityRole="button"
+            accessibilityLabel="Mensagem não salva. Tocar para tentar de novo"
+          >
+            <Text style={styles.saveFailedText}>⚠️ Não salva — tocar para tentar de novo</Text>
+          </TouchableOpacity>
         )}
       </TouchableOpacity>
     </View>
@@ -126,8 +145,13 @@ function formatDuration(ms: number): string {
 }
 
 export default function ChatScreen({ profile }: Props) {
-  const { messages, isLoading, sendMessage, clearHistory } = useChat(profile);
+  const {
+    messages, isLoading, sendMessage, clearHistory,
+    loadState, loadError, reload, hasMore, loadingMore, loadMore, retrySave,
+  } = useChat(profile);
   const [inputText, setInputText] = useState('');
+  const [token, setToken] = useState<string | null>(null);
+  const didInitialScroll = useRef(false);
   const [pendingImage, setPendingImage] = useState<{ uri: string; base64: string; mimeType: string } | null>(null);
   const listRef = useRef<FlatList>(null);
   const streak = calculateStreak(messages);
@@ -141,10 +165,34 @@ export default function ChatScreen({ profile }: Props) {
   } = useVoiceRecorder();
 
   useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
-    }
-  }, [messages]);
+    getToken().then(setToken);
+  }, []);
+
+  // Rola para o fim quando chega mensagem nova (não ao carregar as antigas).
+  const lastId = messages[messages.length - 1]?.id;
+  useEffect(() => {
+    if (!lastId) return;
+    const animated = didInitialScroll.current;
+    didInitialScroll.current = true;
+    setTimeout(() => listRef.current?.scrollToEnd({ animated }), 100);
+  }, [lastId]);
+
+  const handleClear = () => {
+    Alert.alert('Limpar conversa', 'Apagar todas as mensagens? Os dados já salvos no Diário continuam.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Limpar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await clearHistory();
+          } catch (e) {
+            Alert.alert('Não foi possível limpar', errorMessage(e));
+          }
+        },
+      },
+    ]);
+  };
 
   const handlePickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -202,7 +250,13 @@ export default function ChatScreen({ profile }: Props) {
               <Text style={styles.streakText}>{streak}</Text>
             </View>
           )}
-          <TouchableOpacity onPress={clearHistory} style={styles.clearBtn}>
+          <TouchableOpacity
+            onPress={handleClear}
+            style={styles.clearBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Limpar conversa"
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+          >
             <Text style={styles.clearBtnText}>Limpar</Text>
           </TouchableOpacity>
         </View>
@@ -214,11 +268,35 @@ export default function ChatScreen({ profile }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
+        {loadState === 'loading' && (
+          <View style={styles.centerState}>
+            <ActivityIndicator color={colors.primary} />
+          </View>
+        )}
+        {loadState === 'error' && (
+          <View style={styles.centerState}>
+            <Text style={styles.stateTitle}>Não foi possível carregar a conversa</Text>
+            <Text style={styles.stateText}>{loadError}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={reload} accessibilityRole="button">
+              <Text style={styles.retryBtnText}>Tentar de novo</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {loadState === 'ready' && (
         <FlatList
           ref={listRef}
           data={messages}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <MessageBubble message={item} />}
+          renderItem={({ item }) => <MessageBubble message={item} token={token} onRetry={retrySave} />}
+          ListHeaderComponent={
+            hasMore ? (
+              <TouchableOpacity style={styles.loadMoreBtn} onPress={loadMore} disabled={loadingMore} accessibilityRole="button">
+                {loadingMore
+                  ? <ActivityIndicator size="small" color={colors.primary} />
+                  : <Text style={styles.loadMoreText}>Carregar mensagens anteriores</Text>}
+              </TouchableOpacity>
+            ) : null
+          }
           style={styles.list}
           contentContainerStyle={styles.messageList}
           showsVerticalScrollIndicator={false}
@@ -237,8 +315,9 @@ export default function ChatScreen({ profile }: Props) {
             ) : null
           }
         />
+        )}
 
-        {messages.length <= 1 && (
+        {loadState === 'ready' && messages.length <= 1 && (
           <View style={styles.quickPrompts}>
             {quickPrompts.map((prompt) => (
               <TouchableOpacity
@@ -277,10 +356,10 @@ export default function ChatScreen({ profile }: Props) {
           </View>
         ) : (
           <View style={styles.inputRow}>
-            <TouchableOpacity style={styles.imageBtn} onPress={handlePickImage} disabled={isLoading || isTranscribing}>
+            <TouchableOpacity style={styles.imageBtn} onPress={handlePickImage} disabled={isLoading || isTranscribing} accessibilityRole="button" accessibilityLabel="Enviar imagem">
               <Text style={styles.imageBtnIcon}>🖼</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.imageBtn} onPress={startRecording} disabled={isLoading || isTranscribing}>
+            <TouchableOpacity style={styles.imageBtn} onPress={startRecording} disabled={isLoading || isTranscribing} accessibilityRole="button" accessibilityLabel="Gravar mensagem de voz">
               {isTranscribing ? (
                 <ActivityIndicator size="small" color={colors.primary} />
               ) : (
@@ -301,6 +380,8 @@ export default function ChatScreen({ profile }: Props) {
               style={[styles.sendBtn, (!inputText.trim() && !pendingImage || isLoading) && styles.sendBtnDisabled]}
               onPress={handleSend}
               disabled={(!inputText.trim() && !pendingImage) || isLoading}
+              accessibilityRole="button"
+              accessibilityLabel="Enviar mensagem"
             >
               <Text style={styles.sendIcon}>↑</Text>
             </TouchableOpacity>
@@ -381,6 +462,15 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     alignSelf: 'flex-start',
   },
+  saveFailed: { marginTop: 6 },
+  saveFailedText: { color: colors.error, fontSize: fontSize.xs, fontFamily: fontFamily.medium },
+  centerState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg, gap: spacing.sm },
+  stateTitle: { color: colors.text, fontSize: fontSize.md, fontFamily: fontFamily.semiBold, textAlign: 'center' },
+  stateText: { color: colors.textSecondary, fontSize: fontSize.sm, fontFamily: fontFamily.regular, textAlign: 'center' },
+  retryBtn: { marginTop: spacing.sm, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, minHeight: 44, justifyContent: 'center' },
+  retryBtnText: { color: '#fff', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
+  loadMoreBtn: { alignSelf: 'center', paddingVertical: spacing.sm, paddingHorizontal: spacing.md, minHeight: 44, justifyContent: 'center' },
+  loadMoreText: { color: colors.primary, fontSize: fontSize.sm, fontFamily: fontFamily.medium },
   dataTagText: { color: colors.primaryDark, fontSize: fontSize.xs, fontFamily: fontFamily.medium },
   typingIndicator: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.md },
   quickPrompts: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm, gap: spacing.xs, flexDirection: 'row', flexWrap: 'wrap' },

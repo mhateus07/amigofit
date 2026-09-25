@@ -4,11 +4,12 @@ import {
   KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { API_BASE, saveToken, saveStoredUser } from '../services/storage';
+import { storage } from '../services/storage';
+import { errorMessage } from '../services/api';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
 interface Props {
-  onAuth: (user: { id: string; name: string; email: string }, token: string) => void;
+  onAuth: (user: { id: string; name: string; email: string }, token: string) => Promise<void> | void;
   initialMode?: 'login' | 'register';
 }
 
@@ -27,25 +28,13 @@ export default function AuthScreen({ onAuth, initialMode = 'login' }: Props) {
 
     setLoading(true);
     try {
-      const endpoint = mode === 'register' ? '/auth/register' : '/auth/login';
-      const body = mode === 'register'
-        ? { name: name.trim(), email: email.trim(), password }
-        : { email: email.trim(), password };
-
-      const res = await fetch(`${API_BASE}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-
-      if (!res.ok) { setError(data.error || 'Algo deu errado.'); return; }
-
-      await saveToken(data.token);
-      await saveStoredUser(data.user);
-      onAuth(data.user, data.token);
-    } catch {
-      setError('Não foi possível conectar ao servidor.');
+      const { token, user } = mode === 'register'
+        ? await storage.register(name.trim(), email.trim(), password)
+        : await storage.login(email.trim(), password);
+      // A sessão (token, usuário, dados locais) é iniciada pelo App em onAuth.
+      await onAuth(user, token);
+    } catch (e) {
+      setError(errorMessage(e, 'Não foi possível conectar ao servidor.'));
     } finally {
       setLoading(false);
     }

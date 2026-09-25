@@ -9,9 +9,10 @@ import {
 } from '@kingstinct/react-native-healthkit';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ExtractedData } from '../types';
-import { storage } from './storage';
+import { storage, userScopedKey } from './storage';
 
-const LAST_SYNC_KEY = 'amigofit_apple_health_last_sync';
+// Separado por conta: trocar de conta não herda o marcador da anterior.
+const lastSyncKey = () => userScopedKey('amigofit_apple_health_last_sync');
 
 const READ_PERMISSIONS = [
   'HKQuantityTypeIdentifierStepCount',
@@ -67,12 +68,23 @@ function dayKey(date: Date): string {
 }
 
 export async function getLastAppleHealthSyncTime(): Promise<Date | null> {
-  const raw = await AsyncStorage.getItem(LAST_SYNC_KEY);
+  const raw = await AsyncStorage.getItem(lastSyncKey());
   return raw ? new Date(parseInt(raw, 10)) : null;
 }
 
-async function saveLastSyncTime(): Promise<void> {
-  await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
+async function saveLastSyncTime(time: number): Promise<void> {
+  await AsyncStorage.setItem(lastSyncKey(), time.toString());
+}
+
+// Relê desde o início do dia ANTERIOR à última sincronização: totais diários
+// (passos, sono, FC) são recalculados por inteiro e substituem o registro do
+// dia via sourceRef, em vez de gravar só o parcial desde a última leitura.
+function windowStart(lastSync: Date | null): Date {
+  if (!lastSync) return daysAgo(7);
+  const d = new Date(lastSync);
+  d.setDate(d.getDate() - 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 export async function syncAppleHealth(): Promise<{ synced: number; error?: string }> {
@@ -84,7 +96,7 @@ export async function syncAppleHealth(): Promise<{ synced: number; error?: strin
     await requestAuthorization({ toRead: READ_PERMISSIONS });
 
     const lastSync = await getLastAppleHealthSyncTime();
-    const startDate = lastSync ?? daysAgo(7);
+    const startDate = windowStart(lastSync);
     const endDate = new Date();
     const dateFilter = { filter: { date: { startDate, endDate } }, limit: 0, ascending: true } as const;
 
@@ -109,6 +121,8 @@ export async function syncAppleHealth(): Promise<{ synced: number; error?: strin
             value: `${hours} horas`,
             rawText: `[Apple Saúde] Sono: ${hours} horas`,
             timestamp: new Date(`${day}T12:00:00Z`).getTime(),
+            source: 'apple_health',
+            sourceRef: `apple_health:sleep:${day}`,
           });
         }
       }
@@ -130,6 +144,8 @@ export async function syncAppleHealth(): Promise<{ synced: number; error?: strin
           value: `${total.toLocaleString('pt-BR')} passos`,
           rawText: `[Apple Saúde] Passos em ${day}: ${total}`,
           timestamp: new Date(`${day}T12:00:00Z`).getTime(),
+          source: 'apple_health',
+          sourceRef: `apple_health:steps:${day}`,
         });
       }
     } catch { /* permissão não concedida */ }
@@ -147,6 +163,8 @@ export async function syncAppleHealth(): Promise<{ synced: number; error?: strin
             value: `${mins} minutos`,
             rawText: `[Apple Saúde] ${name}: ${mins} minutos`,
             timestamp: new Date(w.startDate).getTime(),
+            source: 'apple_health',
+            sourceRef: `apple_health:workout:${w.uuid}`,
           });
         }
       }
@@ -172,6 +190,8 @@ export async function syncAppleHealth(): Promise<{ synced: number; error?: strin
             value: `${avg} bpm`,
             rawText: `[Apple Saúde] FC média em ${day}: ${avg} bpm`,
             timestamp: new Date(`${day}T12:00:00Z`).getTime(),
+            source: 'apple_health',
+            sourceRef: `apple_health:hr:${day}`,
           });
         }
       }
@@ -188,14 +208,17 @@ export async function syncAppleHealth(): Promise<{ synced: number; error?: strin
           value: `${kg} kg`,
           rawText: `[Apple Saúde] Peso: ${kg} kg`,
           timestamp: new Date(s.startDate).getTime(),
+          source: 'apple_health',
+          sourceRef: `apple_health:weight:${s.uuid}`,
         });
       }
     } catch { /* permissão não concedida */ }
 
-    if (extracted.length > 0) {
-      await storage.addExtractedData(extracted);
-    }
-    await saveLastSyncTime();
+    // Só avança o marcador depois que o servidor confirmou a gravação: se
+    // falhar, a próxima sincronização relê o mesmo período (sem duplicar,
+    // graças ao sourceRef).
+    await storage.addExtractedData(extracted);
+    await saveLastSyncTime(endDate.getTime());
 
     return { synced: extracted.length };
   } catch (e: any) {

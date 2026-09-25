@@ -1,363 +1,311 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin, AiInsight, WorkoutPlan, WorkoutCheckin } from '../types';
+import {
+  Message, UserProfile, ExtractedData, AIProvider, Meal, MealCheckin, AiInsight, WorkoutPlan, WorkoutCheckin,
+} from '../types';
+import { API_BASE, TOKEN_KEY, AI_TIMEOUT_MS, apiRequest, newSessionEpoch, ApiError } from './api';
 
-export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://amigofit-api.impulsiodigital.com';
+export { API_BASE };
 
-const LOCAL_KEYS = {
-  TOKEN: 'amigofit_token',
-  USER: 'amigofit_user',
-  PROVIDER: 'amigofit_provider',
-  API_KEY_ANTHROPIC: 'amigofit_api_key',
-  API_KEY_OPENAI: 'amigofit_api_key_openai',
-  API_KEY_GEMINI: 'amigofit_api_key_gemini',
-  API_KEY_GROQ: 'amigofit_api_key_groq',
-  INSIGHTS_CACHE: 'amigofit_insights_cache',
+// Todas as funções que falam com o servidor LANÇAM erro (ApiError) em vez de
+// devolver lista vazia ou fingir sucesso: quem chama decide como mostrar a
+// falha e oferecer "tentar de novo".
+
+export interface AuthUser { id: string; name: string; email: string }
+
+const USER_KEY = 'amigofit_user';
+// Chaves de IA e provedor que versões antigas do app guardavam no aparelho.
+const LEGACY_AI_KEYS = ['amigofit_api_key', 'amigofit_api_key_openai', 'amigofit_api_key_gemini', 'amigofit_api_key_groq'];
+const LEGACY_PROVIDER_KEYS: Record<string, AIProvider> = {
+  amigofit_api_key: 'anthropic',
+  amigofit_api_key_openai: 'openai',
+  amigofit_api_key_gemini: 'gemini',
+  amigofit_api_key_groq: 'groq',
 };
+const LEGACY_LOCAL_KEYS = ['amigofit_provider', 'amigofit_insights_cache', 'amigofit_apple_health_last_sync', 'amigofit_health_last_sync'];
 
-interface InsightsCache {
-  date: string;
-  count: number;
-  insights: AiInsight[];
+// ── Dados locais por usuário ──────────────────────────────
+// Cache e marcadores de sincronização ficam separados por conta: trocar de
+// conta no mesmo aparelho nunca reaproveita dados da conta anterior.
+let activeUserId: string | null = null;
+
+export function userScopedKey(base: string): string {
+  if (!activeUserId) throw new Error('Nenhum usuário ativo');
+  return `${base}:${activeUserId}`;
 }
 
-const PROVIDER_KEY_MAP: Record<AIProvider, string> = {
-  anthropic: LOCAL_KEYS.API_KEY_ANTHROPIC,
-  openai: LOCAL_KEYS.API_KEY_OPENAI,
-  gemini: LOCAL_KEYS.API_KEY_GEMINI,
-  groq: LOCAL_KEYS.API_KEY_GROQ,
-};
+const USER_SCOPED_BASES = ['amigofit_insights_cache', 'amigofit_apple_health_last_sync', 'amigofit_health_last_sync'];
 
-// ── Secure storage (token + chaves de API) ─────────────────
-// Token JWT e chaves de API de IA são dados sensíveis: ficam no Keychain
-// (iOS) / Keystore (Android) via expo-secure-store, nunca em AsyncStorage
-// (que não é criptografado). getSecure migra automaticamente qualquer valor
-// remanescente de uma versão anterior do app que ainda usava AsyncStorage.
-async function getSecure(key: string): Promise<string | null> {
-  const value = await SecureStore.getItemAsync(key);
+// ── Sessão ────────────────────────────────────────────────
+export async function getToken(): Promise<string | null> {
+  const value = await SecureStore.getItemAsync(TOKEN_KEY);
   if (value !== null) return value;
-  const legacy = await AsyncStorage.getItem(key);
+  // Migração de versões que guardavam o token no AsyncStorage (texto puro).
+  const legacy = await AsyncStorage.getItem(TOKEN_KEY);
   if (legacy !== null) {
-    await SecureStore.setItemAsync(key, legacy);
-    await AsyncStorage.removeItem(key);
+    await SecureStore.setItemAsync(TOKEN_KEY, legacy);
+    await AsyncStorage.removeItem(TOKEN_KEY);
   }
   return legacy;
 }
-async function setSecure(key: string, value: string): Promise<void> {
-  await SecureStore.setItemAsync(key, value);
-}
-async function deleteSecure(key: string): Promise<void> {
-  await SecureStore.deleteItemAsync(key);
-  await AsyncStorage.removeItem(key);
-}
 
-// ── Auth token ────────────────────────────────────────────
-export async function getToken(): Promise<string | null> {
-  return getSecure(LOCAL_KEYS.TOKEN);
-}
-export async function saveToken(token: string): Promise<void> {
-  await setSecure(LOCAL_KEYS.TOKEN, token);
-}
-export async function clearToken(): Promise<void> {
-  await Promise.all([deleteSecure(LOCAL_KEYS.TOKEN), AsyncStorage.removeItem(LOCAL_KEYS.USER)]);
-}
-
-export async function getStoredUser(): Promise<{ id: string; name: string; email: string } | null> {
-  const raw = await AsyncStorage.getItem(LOCAL_KEYS.USER);
+export async function getStoredUser(): Promise<AuthUser | null> {
+  const raw = await AsyncStorage.getItem(USER_KEY);
   return raw ? JSON.parse(raw) : null;
 }
-export async function saveStoredUser(user: { id: string; name: string; email: string }): Promise<void> {
-  await AsyncStorage.setItem(LOCAL_KEYS.USER, JSON.stringify(user));
+
+// Início de sessão (login, cadastro ou app abrindo já logado).
+export async function startSession(user: AuthUser, token?: string): Promise<void> {
+  newSessionEpoch();
+  activeUserId = user.id;
+  aiKeysCache = null;
+  if (token) await SecureStore.setItemAsync(TOKEN_KEY, token);
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
-// ── AI Provider ───────────────────────────────────────────
-export async function getProvider(): Promise<AIProvider> {
-  const p = await AsyncStorage.getItem(LOCAL_KEYS.PROVIDER);
-  return (p as AIProvider) || 'anthropic';
-}
-export async function saveProvider(p: AIProvider): Promise<void> {
-  await AsyncStorage.setItem(LOCAL_KEYS.PROVIDER, p);
-}
-
-export async function authHeaders(): Promise<Record<string, string>> {
-  const token = await getToken();
-  const provider = await getProvider();
-  const apiKey = await getSecure(PROVIDER_KEY_MAP[provider]);
-  const h: Record<string, string> = { 'Content-Type': 'application/json', 'x-provider': provider };
-  if (token) h['Authorization'] = `Bearer ${token}`;
-  if (apiKey) h['x-api-key'] = apiKey;
-  return h;
+// Logout: apaga token, usuário, caches e marcadores desta conta, e descarta
+// respostas de requisições que ainda estejam a caminho.
+export async function endSession(): Promise<void> {
+  const userId = activeUserId;
+  newSessionEpoch();
+  activeUserId = null;
+  aiKeysCache = null;
+  const scoped = userId ? USER_SCOPED_BASES.map((b) => `${b}:${userId}`) : [];
+  await Promise.all([
+    SecureStore.deleteItemAsync(TOKEN_KEY),
+    ...LEGACY_AI_KEYS.map((k) => SecureStore.deleteItemAsync(k)),
+    AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, ...LEGACY_AI_KEYS, ...LEGACY_LOCAL_KEYS, ...scoped]),
+  ]);
 }
 
-// Anthropic (Claude) não tem endpoint de transcrição de áudio — para o
-// ditado por voz, usamos o provedor ativo se ele suportar, senão caímos
-// para o primeiro provedor com chave configurada nesta ordem (Groq é o
-// mais rápido/barato para Whisper, depois OpenAI, depois Gemini).
-const TRANSCRIPTION_CAPABLE: AIProvider[] = ['groq', 'openai', 'gemini'];
-
-export async function authHeadersForTranscription(): Promise<Record<string, string> | null> {
-  const token = await getToken();
-  const active = await getProvider();
-  const order = TRANSCRIPTION_CAPABLE.includes(active)
-    ? [active, ...TRANSCRIPTION_CAPABLE.filter((p) => p !== active)]
-    : TRANSCRIPTION_CAPABLE;
-
-  for (const provider of order) {
-    const apiKey = await getSecure(PROVIDER_KEY_MAP[provider]);
-    if (apiKey) {
-      const h: Record<string, string> = { 'Content-Type': 'application/json', 'x-provider': provider, 'x-api-key': apiKey };
-      if (token) h['Authorization'] = `Bearer ${token}`;
-      return h;
-    }
-  }
-  return null;
+// ── Auth ──────────────────────────────────────────────────
+async function login(email: string, password: string): Promise<{ token: string; user: AuthUser }> {
+  return apiRequest('/auth/login', { method: 'POST', body: { email, password }, anonymous: true });
+}
+async function register(name: string, email: string, password: string): Promise<{ token: string; user: AuthUser }> {
+  return apiRequest('/auth/register', { method: 'POST', body: { name, email, password }, anonymous: true });
+}
+async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const { token } = await apiRequest<{ token: string }>('/auth/password', { method: 'POST', body: { currentPassword, newPassword } });
+  await SecureStore.setItemAsync(TOKEN_KEY, token);
+}
+async function logoutAllDevices(): Promise<void> {
+  await apiRequest('/auth/logout-all', { method: 'POST' });
+}
+async function deleteAccount(password: string): Promise<void> {
+  await apiRequest('/auth/account', { method: 'DELETE', body: { password } });
 }
 
 // ── Messages ──────────────────────────────────────────────
-async function getMessages(): Promise<Message[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/messages`, { headers: await authHeaders() });
-    const data = await res.json();
-    return data.messages || [];
-  } catch { return []; }
+// Página das mensagens mais recentes (antes de "before"), em ordem cronológica.
+async function getMessages(options: { limit?: number; before?: number } = {}): Promise<{ messages: Message[]; hasMore: boolean }> {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.before) params.set('before', String(options.before));
+  const qs = params.toString();
+  return apiRequest(`/api/messages${qs ? `?${qs}` : ''}`);
 }
-async function saveMessages(messages: Message[]): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/messages`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ messages }),
-    });
-  } catch { /* silent */ }
+async function getAllMessages(): Promise<Message[]> {
+  return (await getMessages()).messages;
 }
-async function addMessage(message: Message): Promise<void> {
-  const messages = await getMessages();
-  messages.push(message);
-  await saveMessages(messages);
+// Grava UMA mensagem (idempotente pelo id).
+async function saveMessage(message: Message): Promise<void> {
+  const { id, role, content, timestamp, imageId } = message;
+  await apiRequest(`/api/messages/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: { role, content, timestamp, imageId },
+  });
+}
+async function clearMessages(): Promise<void> {
+  await apiRequest('/api/messages', { method: 'DELETE' });
+}
+async function uploadChatImage(imageBase64: string, mimeType: string): Promise<string> {
+  const { id } = await apiRequest<{ id: string }>('/api/chat-images', {
+    method: 'POST',
+    body: { imageBase64, mimeType },
+    timeoutMs: 60_000,
+  });
+  return id;
+}
+export function chatImageUrl(id: string): string {
+  return `${API_BASE}/api/chat-images/${id}/file`;
 }
 
 // ── Profile ───────────────────────────────────────────────
+// null = a conta ainda não tem perfil (primeiro acesso). Falha de rede ou
+// sessão expirada LANÇA erro — antes virava null e mandava para o onboarding.
 async function getProfile(): Promise<UserProfile | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/profile`, { headers: await authHeaders() });
-    const data = await res.json();
-    return data.profile || null;
-  } catch { return null; }
+  const { profile } = await apiRequest<{ profile: UserProfile | null }>('/api/profile');
+  return profile;
 }
-async function saveProfile(profile: UserProfile): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/profile`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify(profile),
-    });
-  } catch { /* silent */ }
+// Mescla com o perfil salvo no servidor e devolve o perfil completo.
+async function saveProfile(updates: Partial<UserProfile>): Promise<UserProfile> {
+  const { profile } = await apiRequest<{ profile: UserProfile }>('/api/profile', { method: 'POST', body: updates });
+  return profile;
 }
 
-// ── Extracted Data ────────────────────────────────────────
+// ── Extracted Data (Diário) ───────────────────────────────
 async function getExtractedData(): Promise<ExtractedData[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/extracted-data`, { headers: await authHeaders() });
-    const data = await res.json();
-    return data.data || [];
-  } catch { return []; }
+  const { data } = await apiRequest<{ data: ExtractedData[] }>('/api/extracted-data');
+  return data;
 }
-async function addExtractedData(data: ExtractedData[]): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/extracted-data`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ data }),
-    });
-  } catch { /* silent */ }
+async function addExtractedData(data: ExtractedData[]): Promise<number[]> {
+  if (data.length === 0) return [];
+  const { ids } = await apiRequest<{ ids: number[] }>('/api/extracted-data', { method: 'POST', body: { data } });
+  return ids;
+}
+async function updateExtractedData(id: number, updates: Pick<Partial<ExtractedData>, 'category' | 'label' | 'value'>): Promise<ExtractedData> {
+  const { data } = await apiRequest<{ data: ExtractedData }>(`/api/extracted-data/${id}`, { method: 'PATCH', body: updates });
+  return data;
+}
+async function deleteExtractedData(id: number): Promise<void> {
+  await apiRequest(`/api/extracted-data/${id}`, { method: 'DELETE' });
 }
 
 // ── Meal Plan ─────────────────────────────────────────────
 async function getMealPlan(): Promise<Meal[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/meal-plan`, { headers: await authHeaders() });
-    const data = await res.json();
-    return data.meals || [];
-  } catch { return []; }
+  const { meals } = await apiRequest<{ meals: Meal[] }>('/api/meal-plan');
+  return meals;
 }
 async function saveMealPlan(meals: Meal[]): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/meal-plan`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ meals }),
-    });
-  } catch { /* silent */ }
+  await apiRequest('/api/meal-plan', { method: 'POST', body: { meals } });
 }
 async function getCheckins(date: string): Promise<MealCheckin[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/meal-plan/checkins?date=${date}`, { headers: await authHeaders() });
-    const data = await res.json();
-    return data.checkins || [];
-  } catch { return []; }
+  const { checkins } = await apiRequest<{ checkins: MealCheckin[] }>(`/api/meal-plan/checkins?date=${date}`);
+  return checkins;
 }
 async function checkInMeal(mealId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/meal-plan/checkins`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ mealId, date, status }),
-    });
-  } catch { /* silent */ }
+  await apiRequest('/api/meal-plan/checkins', { method: 'POST', body: { mealId, date, status } });
 }
-async function extractMealsFromPdf(pdfBase64: string): Promise<{ meals: Omit<Meal, 'id'>[]; error?: string }> {
-  try {
-    const res = await fetch(`${API_BASE}/api/extract-meals`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ pdfBase64 }),
-    });
-    const data = await res.json();
-    return { meals: data.meals || [], error: data.error };
-  } catch {
-    return { meals: [], error: 'Falha de conexão ao enviar o PDF. Tente novamente.' };
-  }
+async function extractMealsFromPdf(pdfBase64: string): Promise<Omit<Meal, 'id'>[]> {
+  const { meals } = await apiRequest<{ meals: Omit<Meal, 'id'>[] }>('/api/extract-meals', {
+    method: 'POST', body: { pdfBase64 }, timeoutMs: AI_TIMEOUT_MS,
+  });
+  return meals;
 }
 
 // ── Workout Plans (fichas de treino) ───────────────────────
 async function getWorkoutPlans(): Promise<WorkoutPlan[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/workout-plans`, { headers: await authHeaders() });
-    const data = await res.json();
-    return data.plans || [];
-  } catch { return []; }
+  const { plans } = await apiRequest<{ plans: WorkoutPlan[] }>('/api/workout-plans');
+  return plans;
 }
 async function saveWorkoutPlans(plans: WorkoutPlan[]): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/workout-plans`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ plans }),
-    });
-  } catch { /* silent */ }
+  await apiRequest('/api/workout-plans', { method: 'POST', body: { plans } });
 }
 async function getWorkoutCheckins(date: string): Promise<WorkoutCheckin[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/workout-plans/checkins?date=${date}`, { headers: await authHeaders() });
-    const data = await res.json();
-    return data.checkins || [];
-  } catch { return []; }
+  const { checkins } = await apiRequest<{ checkins: WorkoutCheckin[] }>(`/api/workout-plans/checkins?date=${date}`);
+  return checkins;
 }
 async function checkInWorkout(workoutPlanId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/workout-plans/checkins`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ workoutPlanId, date, status }),
-    });
-  } catch { /* silent */ }
+  await apiRequest('/api/workout-plans/checkins', { method: 'POST', body: { workoutPlanId, date, status } });
 }
-async function extractWorkoutFromPdf(pdfBase64: string): Promise<{ plans: Omit<WorkoutPlan, 'id'>[]; error?: string }> {
-  try {
-    const res = await fetch(`${API_BASE}/api/extract-workout`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ pdfBase64 }),
-    });
-    const data = await res.json();
-    return { plans: data.plans || [], error: data.error };
-  } catch {
-    return { plans: [], error: 'Falha de conexão ao enviar o PDF. Tente novamente.' };
-  }
+async function extractWorkoutFromPdf(pdfBase64: string): Promise<Omit<WorkoutPlan, 'id'>[]> {
+  const { plans } = await apiRequest<{ plans: Omit<WorkoutPlan, 'id'>[] }>('/api/extract-workout', {
+    method: 'POST', body: { pdfBase64 }, timeoutMs: AI_TIMEOUT_MS,
+  });
+  return plans;
 }
-async function extractWorkoutFromImage(imageBase64: string, mimeType: string): Promise<{ plans: Omit<WorkoutPlan, 'id'>[]; error?: string }> {
-  try {
-    const res = await fetch(`${API_BASE}/api/extract-workout`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ imageBase64, mimeType }),
-    });
-    const data = await res.json();
-    return { plans: data.plans || [], error: data.error };
-  } catch {
-    return { plans: [], error: 'Falha de conexão ao enviar a foto. Tente novamente.' };
-  }
+async function extractWorkoutFromImage(imageBase64: string, mimeType: string): Promise<Omit<WorkoutPlan, 'id'>[]> {
+  const { plans } = await apiRequest<{ plans: Omit<WorkoutPlan, 'id'>[] }>('/api/extract-workout', {
+    method: 'POST', body: { imageBase64, mimeType }, timeoutMs: AI_TIMEOUT_MS,
+  });
+  return plans;
 }
 
 // ── Exercise videos ──────────────────────────────────────────
-async function uploadExerciseVideo(fileUri: string, mimeType: string): Promise<{ id?: string; error?: string }> {
+async function uploadExerciseVideo(fileUri: string, mimeType: string): Promise<string> {
+  const token = await getToken();
+  let res: FileSystem.FileSystemUploadResult;
   try {
-    const token = await getToken();
-    const res = await FileSystem.uploadAsync(`${API_BASE}/api/exercise-videos`, fileUri, {
+    res = await FileSystem.uploadAsync(`${API_BASE}/api/exercise-videos`, fileUri, {
       httpMethod: 'POST',
       uploadType: FileSystem.FileSystemUploadType.MULTIPART,
       fieldName: 'video',
       mimeType,
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
-    const data = JSON.parse(res.body || '{}');
-    if (res.status < 200 || res.status >= 300) return { error: data.error || `HTTP ${res.status}` };
-    return { id: data.id };
   } catch {
-    return { error: 'Falha de conexão ao enviar o vídeo. Tente novamente.' };
+    throw new ApiError(0, 'Falha de conexão ao enviar o vídeo. Tente novamente.');
   }
+  let data: { id?: string; error?: string } = {};
+  try { data = JSON.parse(res.body || '{}'); } catch { /* corpo não-JSON */ }
+  if (res.status < 200 || res.status >= 300 || !data.id) {
+    throw new ApiError(res.status, data.error || `Erro ${res.status} ao enviar o vídeo.`);
+  }
+  return data.id;
 }
 async function deleteExerciseVideo(id: string): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/api/exercise-videos/${id}`, {
-      method: 'DELETE',
-      headers: await authHeaders(),
-    });
-  } catch { /* silent */ }
+  await apiRequest(`/api/exercise-videos/${id}`, { method: 'DELETE' });
 }
 export function exerciseVideoUrl(id: string): string {
   return `${API_BASE}/api/exercise-videos/${id}/file`;
 }
 
-// ── API Key (per-provider) ────────────────────────────────
-async function getApiKey(provider?: AIProvider): Promise<string | null> {
-  const p = provider ?? await getProvider();
-  return getSecure(PROVIDER_KEY_MAP[p]);
+// ── Chaves de IA ──────────────────────────────────────────
+// Ficam criptografadas no servidor, que as usa diretamente. O app só sabe
+// QUAIS provedores têm chave (e os 4 últimos caracteres), nunca a chave.
+export type AiKeyStatus = Partial<Record<AIProvider, { last4: string }>>;
+let aiKeysCache: AiKeyStatus | null = null;
+
+async function getAiKeys(force = false): Promise<AiKeyStatus> {
+  if (aiKeysCache && !force) return aiKeysCache;
+  const { keys } = await apiRequest<{ keys: AiKeyStatus }>('/api/ai-keys');
+  aiKeysCache = keys;
+  return keys;
 }
-async function saveApiKey(key: string, provider?: AIProvider): Promise<void> {
-  const p = provider ?? await getProvider();
-  await setSecure(PROVIDER_KEY_MAP[p], key);
+async function saveApiKey(provider: AIProvider, apiKey: string): Promise<AiKeyStatus> {
+  const { keys } = await apiRequest<{ keys: AiKeyStatus }>(`/api/ai-keys/${provider}`, { method: 'PUT', body: { apiKey } });
+  aiKeysCache = keys;
+  return keys;
+}
+async function removeApiKey(provider: AIProvider): Promise<AiKeyStatus> {
+  const { keys } = await apiRequest<{ keys: AiKeyStatus }>(`/api/ai-keys/${provider}`, { method: 'DELETE' });
+  aiKeysCache = keys;
+  return keys;
 }
 async function hasAnyApiKey(): Promise<boolean> {
-  const values = await Promise.all(Object.values(PROVIDER_KEY_MAP).map(getSecure));
-  return values.some((v) => !!v);
+  return Object.keys(await getAiKeys()).length > 0;
+}
+
+// Versões anteriores guardavam as chaves no Keychain do aparelho. Envia essas
+// chaves para o servidor (se ele ainda não tiver) e só então as apaga daqui.
+export async function migrateLocalAiKeys(): Promise<void> {
+  const serverKeys = await getAiKeys(true);
+  for (const localKey of LEGACY_AI_KEYS) {
+    const value = await SecureStore.getItemAsync(localKey) ?? await AsyncStorage.getItem(localKey);
+    if (!value) continue;
+    const provider = LEGACY_PROVIDER_KEYS[localKey];
+    if (!serverKeys[provider]) await saveApiKey(provider, value);
+    await SecureStore.deleteItemAsync(localKey);
+    await AsyncStorage.removeItem(localKey);
+  }
 }
 
 // ── Insights (IA) cache ────────────────────────────────────
-// Evita gerar insights via IA a cada abertura da tela — só regenera se os
-// dados mudaram (novo count) ou o dia virou, a menos que force=true (pull-to-refresh).
+// Evita gerar insights via IA a cada abertura da tela. A chave do cache é
+// uma assinatura dos dados (não só a quantidade), e fica separada por conta.
+export interface InsightsCache {
+  date: string;
+  signature: string;
+  insights: AiInsight[];
+}
 async function getCachedInsights(): Promise<InsightsCache | null> {
-  const raw = await AsyncStorage.getItem(LOCAL_KEYS.INSIGHTS_CACHE);
+  const raw = await AsyncStorage.getItem(userScopedKey('amigofit_insights_cache'));
   return raw ? JSON.parse(raw) : null;
 }
 async function saveCachedInsights(cache: InsightsCache): Promise<void> {
-  await AsyncStorage.setItem(LOCAL_KEYS.INSIGHTS_CACHE, JSON.stringify(cache));
-}
-
-// Popula o cache local (provider em AsyncStorage, chaves no SecureStore) a
-// partir do perfil salvo no servidor - roda no login/startup para que o
-// usuário não precise reconfigurar a chave da IA a cada reinstalação/novo aparelho.
-export async function hydrateAiConfigFromProfile(profile: UserProfile | null): Promise<void> {
-  if (!profile) return;
-  const tasks: Promise<void>[] = [];
-  if (profile.aiProvider) tasks.push(saveProvider(profile.aiProvider));
-  if (profile.aiApiKeys) {
-    for (const p of Object.keys(PROVIDER_KEY_MAP) as AIProvider[]) {
-      tasks.push(saveApiKey(profile.aiApiKeys[p] ?? '', p));
-    }
-  }
-  await Promise.all(tasks);
+  await AsyncStorage.setItem(userScopedKey('amigofit_insights_cache'), JSON.stringify(cache));
 }
 
 export const storage = {
-  getMessages, saveMessages, addMessage,
+  login, register, changePassword, logoutAllDevices, deleteAccount,
+  getMessages, getAllMessages, saveMessage, clearMessages, uploadChatImage,
   getProfile, saveProfile,
-  getExtractedData, addExtractedData,
+  getExtractedData, addExtractedData, updateExtractedData, deleteExtractedData,
   getMealPlan, saveMealPlan, getCheckins, checkInMeal, extractMealsFromPdf,
   getWorkoutPlans, saveWorkoutPlans, getWorkoutCheckins, checkInWorkout, extractWorkoutFromPdf, extractWorkoutFromImage,
   uploadExerciseVideo, deleteExerciseVideo, exerciseVideoUrl,
-  getApiKey, saveApiKey, hasAnyApiKey,
-  getProvider, saveProvider,
+  getAiKeys, saveApiKey, removeApiKey, hasAnyApiKey,
   getCachedInsights, saveCachedInsights,
 };

@@ -1,6 +1,9 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
-  }
+    "strict": true,
+    // O TypeScript 6 não inclui mais @types/* automaticamente.
+    "types": ["jest", "node"]
+  },
+  "exclude": ["node_modules", "server", "ios", "android"]
 }

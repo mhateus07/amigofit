@@ -5,9 +5,10 @@ import {
 } from 'react-native-health-connect';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ExtractedData } from '../types';
-import { storage } from './storage';
+import { storage, userScopedKey } from './storage';
 
-const LAST_SYNC_KEY = 'amigofit_health_last_sync';
+// Separado por conta: trocar de conta não herda o marcador da anterior.
+const lastSyncKey = () => userScopedKey('amigofit_health_last_sync');
 
 const PERMISSIONS = [
   { accessType: 'read' as const, recordType: 'SleepSession' as const },
@@ -51,12 +52,22 @@ function daysAgo(days: number): string {
 }
 
 export async function getLastSyncTime(): Promise<Date | null> {
-  const raw = await AsyncStorage.getItem(LAST_SYNC_KEY);
+  const raw = await AsyncStorage.getItem(lastSyncKey());
   return raw ? new Date(parseInt(raw, 10)) : null;
 }
 
-async function saveLastSyncTime(): Promise<void> {
-  await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
+async function saveLastSyncTime(time: number): Promise<void> {
+  await AsyncStorage.setItem(lastSyncKey(), time.toString());
+}
+
+// Relê desde o início do dia ANTERIOR à última sincronização: totais diários
+// são recalculados por inteiro e substituem o registro do dia via sourceRef.
+function windowStart(lastSync: Date | null): string {
+  if (!lastSync) return daysAgo(7);
+  const d = new Date(lastSync);
+  d.setDate(d.getDate() - 1);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
 }
 
 export async function syncHealthConnect(): Promise<{ synced: number; error?: string }> {
@@ -69,8 +80,9 @@ export async function syncHealthConnect(): Promise<{ synced: number; error?: str
     await requestPermission(PERMISSIONS);
 
     const lastSync = await getLastSyncTime();
-    const startTime = lastSync ? lastSync.toISOString() : daysAgo(7);
-    const endTime = new Date().toISOString();
+    const startTime = windowStart(lastSync);
+    const syncedAt = Date.now();
+    const endTime = new Date(syncedAt).toISOString();
     const timeRangeFilter = { operator: 'between' as const, startTime, endTime };
 
     const extracted: ExtractedData[] = [];
@@ -89,6 +101,8 @@ export async function syncHealthConnect(): Promise<{ synced: number; error?: str
             value: `${hours} horas`,
             rawText: `[Health Connect] Sono: ${hours} horas`,
             timestamp: start,
+            source: 'health_connect',
+            sourceRef: `health_connect:sleep:${r.metadata?.id ?? r.startTime}`,
           });
         }
       }
@@ -109,6 +123,8 @@ export async function syncHealthConnect(): Promise<{ synced: number; error?: str
           value: `${count.toLocaleString('pt-BR')} passos`,
           rawText: `[Health Connect] Passos em ${day}: ${count}`,
           timestamp: new Date(`${day}T12:00:00Z`).getTime(),
+          source: 'health_connect',
+          sourceRef: `health_connect:steps:${day}`,
         });
       }
     } catch { /* permissão não concedida */ }
@@ -128,6 +144,8 @@ export async function syncHealthConnect(): Promise<{ synced: number; error?: str
             value: `${mins} minutos`,
             rawText: `[Health Connect] ${name}: ${mins} minutos`,
             timestamp: start,
+            source: 'health_connect',
+            sourceRef: `health_connect:workout:${r.metadata?.id ?? r.startTime}`,
           });
         }
       }
@@ -154,6 +172,8 @@ export async function syncHealthConnect(): Promise<{ synced: number; error?: str
             value: `${Math.round(sum / count)} bpm`,
             rawText: `[Health Connect] FC média em ${day}: ${Math.round(sum / count)} bpm`,
             timestamp: new Date(`${day}T12:00:00Z`).getTime(),
+            source: 'health_connect',
+            sourceRef: `health_connect:hr:${day}`,
           });
         }
       }
@@ -170,14 +190,15 @@ export async function syncHealthConnect(): Promise<{ synced: number; error?: str
           value: `${kg} kg`,
           rawText: `[Health Connect] Peso: ${kg} kg`,
           timestamp: new Date(r.time).getTime(),
+          source: 'health_connect',
+          sourceRef: `health_connect:weight:${r.metadata?.id ?? r.time}`,
         });
       }
     } catch { /* permissão não concedida */ }
 
-    if (extracted.length > 0) {
-      await storage.addExtractedData(extracted);
-    }
-    await saveLastSyncTime();
+    // Só avança o marcador depois que o servidor confirmou a gravação.
+    await storage.addExtractedData(extracted);
+    await saveLastSyncTime(syncedAt);
 
     return { synced: extracted.length };
   } catch (e: any) {

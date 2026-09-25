@@ -1,9 +1,9 @@
-import React, { useState, useEffect, Component, ReactNode } from 'react';
+import React, { useState, useEffect, useCallback, Component, ReactNode } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text, View } from 'react-native';
+import { Text, View, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import {
@@ -27,7 +27,9 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import SplashScreen from './src/screens/SplashScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 import { UserProfile } from './src/types';
-import { storage, getToken, getStoredUser, clearToken, hydrateAiConfigFromProfile } from './src/services/storage';
+import { storage, getToken, getStoredUser, startSession, endSession, migrateLocalAiKeys, AuthUser } from './src/services/storage';
+import { onUnauthorized, errorMessage, isStaleSession } from './src/services/api';
+import { cancelWorkoutReminder } from './src/services/reminders';
 import { colors, fontSize, fontFamily } from './src/constants/theme';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -130,8 +132,12 @@ export default function App() {
   });
   const [splashDone, setSplashDone] = useState(false);
   const [authReady, setAuthReady]   = useState(false);
-  const [authUser, setAuthUser]     = useState<{ id: string; name: string; email: string } | null>(null);
+  const [authUser, setAuthUser]     = useState<AuthUser | null>(null);
   const [profile, setProfile]       = useState<UserProfile | null>(null);
+  // "sem perfil ainda" (primeiro acesso → onboarding) é diferente de "não
+  // consegui carregar" (rede fora, servidor fora → tela de erro com retry).
+  const [profileState, setProfileState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [authMode, setAuthMode]     = useState<'login' | 'register'>('login');
   const [showAuth, setShowAuth]     = useState(false);
 
@@ -141,42 +147,65 @@ export default function App() {
     }
   }, [fontsLoaded]);
 
+  const loadProfile = useCallback(async () => {
+    setProfileState('loading');
+    setProfileError(null);
+    try {
+      const p = await storage.getProfile();
+      setProfile(p);
+      setProfileState('ready');
+      // Chaves de IA que versões antigas guardavam só no aparelho.
+      migrateLocalAiKeys().catch((e) => console.warn('Migração de chaves de IA:', e));
+    } catch (e) {
+      if (isStaleSession(e)) return;
+      setProfileError(errorMessage(e));
+      setProfileState('error');
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await endSession();
+    await cancelWorkoutReminder().catch(() => {});
+    setAuthUser(null);
+    setProfile(null);
+    setProfileState('loading');
+    setShowAuth(false);
+  }, []);
+
+  // Token expirado ou revogado (ex.: "sair de todos os aparelhos").
   useEffect(() => {
-    const fallback = setTimeout(() => setAuthReady(true), 6000);
+    onUnauthorized(() => {
+      handleLogout();
+      Alert.alert('Sessão encerrada', 'Entre novamente para continuar.');
+    });
+    return () => onUnauthorized(null);
+  }, [handleLogout]);
+
+  useEffect(() => {
     (async () => {
       try {
         const [token, user] = await Promise.all([getToken(), getStoredUser()]);
         if (token && user) {
+          await startSession(user);
           setAuthUser(user);
-          const p = await storage.getProfile();
-          await hydrateAiConfigFromProfile(p);
-          setProfile(p);
+          loadProfile();
         }
       } catch (e) {
         console.warn('Auth init error:', e);
       } finally {
-        clearTimeout(fallback);
         setAuthReady(true);
       }
     })();
-  }, []);
+  }, [loadProfile]);
 
-  const handleAuth = async (user: { id: string; name: string; email: string }, _token: string) => {
+  const handleAuth = async (user: AuthUser, token: string) => {
+    await startSession(user, token);
     setAuthUser(user);
-    const p = await storage.getProfile();
-    await hydrateAiConfigFromProfile(p);
-    setProfile(p);
+    await loadProfile();
   };
 
-  const handleOnboardingComplete = (p: UserProfile, _key: string) => {
+  const handleOnboardingComplete = (p: UserProfile) => {
     setProfile(p);
-  };
-
-  const handleLogout = async () => {
-    await clearToken();
-    setAuthUser(null);
-    setProfile(null);
-    setShowAuth(false);
   };
 
   if (!fontsLoaded) {
@@ -226,6 +255,40 @@ export default function App() {
             />
           </SafeAreaProvider>
         </GestureHandlerRootView>
+      </ErrorBoundary>
+    );
+  }
+
+  if (profileState !== 'ready') {
+    return (
+      <ErrorBoundary>
+        <SafeAreaProvider>
+          <StatusBar style="dark" />
+          <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center', padding: 24, gap: 12 }}>
+            {profileState === 'loading' ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : (
+              <>
+                <Text style={{ color: colors.text, fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, textAlign: 'center' }}>
+                  Não foi possível carregar sua conta
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: fontSize.sm, fontFamily: fontFamily.regular, textAlign: 'center' }}>
+                  {profileError}
+                </Text>
+                <TouchableOpacity
+                  onPress={loadProfile}
+                  accessibilityRole="button"
+                  style={{ backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12, minHeight: 44 }}
+                >
+                  <Text style={{ color: '#fff', fontFamily: fontFamily.semiBold }}>Tentar de novo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleLogout} accessibilityRole="button" style={{ padding: 12, minHeight: 44 }}>
+                  <Text style={{ color: colors.textSecondary, fontFamily: fontFamily.medium }}>Sair da conta</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </SafeAreaProvider>
       </ErrorBoundary>
     );
   }

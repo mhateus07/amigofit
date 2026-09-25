@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView,
+  KeyboardAvoidingView, Platform, ScrollView, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UserProfile, AIProvider } from '../types';
-import { storage, saveProvider } from '../services/storage';
+import { storage } from '../services/storage';
+import { errorMessage } from '../services/api';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 
 const PROVIDERS: { value: AIProvider; label: string; icon: string; prefix: string; hint: string }[] = [
@@ -17,7 +18,7 @@ const PROVIDERS: { value: AIProvider; label: string; icon: string; prefix: strin
 
 interface Props {
   authUser: { id: string; name: string; email: string };
-  onComplete: (profile: UserProfile, apiKey: string) => void;
+  onComplete: (profile: UserProfile) => void;
 }
 
 const GOALS: { value: UserProfile['goal']; label: string; icon: string; desc: string }[] = [
@@ -47,19 +48,23 @@ export default function OnboardingScreen({ authUser, onComplete }: Props) {
 
   const saveAndComplete = async (key: string) => {
     setSaving(true);
-    const profile: UserProfile = {
-      name: name.trim() || authUser.name,
-      goal,
-      level,
-      onboardingComplete: true,
-    };
-    const ops: Promise<void>[] = [storage.saveProfile(profile)];
-    if (key) {
-      ops.push(storage.saveApiKey(key, selectedProvider));
-      ops.push(saveProvider(selectedProvider));
+    try {
+      // A chave vai primeiro: se o servidor recusar, o usuário continua aqui
+      // para corrigir, em vez de entrar no app achando que a IA está ativa.
+      if (key) await storage.saveApiKey(selectedProvider, key);
+      const profile = await storage.saveProfile({
+        name: name.trim() || authUser.name,
+        goal,
+        level,
+        onboardingComplete: true,
+        ...(key ? { aiProvider: selectedProvider } : {}),
+      });
+      onComplete(profile);
+    } catch (e) {
+      Alert.alert('Não foi possível salvar', errorMessage(e));
+    } finally {
+      setSaving(false);
     }
-    await Promise.all(ops);
-    onComplete(profile, key);
   };
 
   const handleFinish = async () => {

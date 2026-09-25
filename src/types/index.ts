@@ -4,15 +4,24 @@ export interface Message {
   content: string;
   timestamp: number;
   extractedData?: ExtractedData[];
-  imageUri?: string;
+  extractedAt?: number; // quando a extração de dados desta mensagem terminou
+  imageId?: string; // imagem anexada, guardada no servidor (chat_images)
+  imageUri?: string; // arquivo local, só enquanto o envio não terminou
+  saveFailed?: boolean; // só no aparelho: a gravação no servidor falhou
 }
 
+export type ExtractedSource = 'chat' | 'manual' | 'apple_health' | 'health_connect' | 'meal_checkin' | 'workout_checkin';
+
 export interface ExtractedData {
+  id?: number;
   category: 'sleep' | 'nutrition' | 'performance' | 'mood' | 'health' | 'workout';
   label: string;
   value: string;
   rawText: string;
   timestamp: number;
+  source?: ExtractedSource;
+  sourceRef?: string; // identificador de origem para sincronização idempotente
+  messageId?: string;
 }
 
 export interface UserProfile {
@@ -29,7 +38,6 @@ export interface UserProfile {
   notificationEnabled?: boolean;
   notificationTime?: string;
   aiProvider?: AIProvider;
-  aiApiKeys?: Partial<Record<AIProvider, string>>;
 }
 
 export interface Conversation {

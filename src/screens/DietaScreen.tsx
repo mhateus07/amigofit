@@ -19,8 +19,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Meal, MealCheckin } from '../types';
 import { useMealPlan } from '../hooks/useMealPlan';
+import { errorMessage } from '../services/api';
 import { storage } from '../services/storage';
-import { colors, spacing, radius, fontSize } from '../constants/theme';
+import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
 
 type MealDraft = Omit<Meal, 'id'>;
 
@@ -110,7 +111,7 @@ function MealFormModal({
     }
     onSave({
       name: name.trim(),
-      time: time.trim(),
+      time: time.trim().padStart(5, '0'),
       description: description.trim() || undefined,
       items: items.split(',').map((i) => i.trim()).filter(Boolean),
     });
@@ -234,7 +235,7 @@ function PdfReviewModal({
 }
 
 export default function DietaScreen() {
-  const { meals, todayCheckins, isLoading, savePlan, checkIn, refresh } = useMealPlan();
+  const { meals, todayCheckins, isLoading, loadError, savePlan, checkIn, refresh } = useMealPlan();
   const [refreshing, setRefreshing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingMeal, setEditingMeal] = useState<Meal | null>(null);
@@ -251,6 +252,25 @@ export default function DietaScreen() {
   const openEdit = (meal: Meal) => { setEditingMeal(meal); setEditingDraftIndex(null); setFormVisible(true); };
   const openEditDraft = (index: number) => { setEditingMeal(null); setEditingDraftIndex(index); setFormVisible(true); };
 
+  // Gravações que o servidor recusou são desfeitas pelo hook; aqui só avisamos.
+  const saveOrAlert = async (next: Meal[]): Promise<boolean> => {
+    try {
+      await savePlan(next);
+      return true;
+    } catch (e) {
+      Alert.alert('Não foi possível salvar', errorMessage(e));
+      return false;
+    }
+  };
+
+  const handleCheckIn = async (mealId: string, status: 'done' | 'skipped') => {
+    try {
+      await checkIn(mealId, status);
+    } catch (e) {
+      Alert.alert('Check-in não registrado', errorMessage(e));
+    }
+  };
+
   const handleFormSave = async (data: { name: string; time: string; description?: string; items: string[] }) => {
     if (editingDraftIndex !== null && pdfDrafts) {
       const updated = [...pdfDrafts];
@@ -258,10 +278,10 @@ export default function DietaScreen() {
       setPdfDrafts(updated);
       setEditingDraftIndex(null);
     } else if (editingMeal) {
-      await savePlan(meals.map((m) => (m.id === editingMeal.id ? { ...m, ...data } : m)));
+      if (!(await saveOrAlert(meals.map((m) => (m.id === editingMeal.id ? { ...m, ...data } : m))))) return;
     } else {
-      const newMeal: Meal = { id: `local_${Date.now()}`, source: 'manual', ...data };
-      await savePlan([...meals, newMeal]);
+      const newMeal: Meal = { id: `meal_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`, source: 'manual', ...data };
+      if (!(await saveOrAlert([...meals, newMeal]))) return;
     }
     setFormVisible(false);
     setEditingMeal(null);
@@ -270,7 +290,7 @@ export default function DietaScreen() {
   const handleDelete = (meal: Meal) => {
     Alert.alert('Excluir refeição', `Remover "${meal.name}" do plano?`, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Excluir', style: 'destructive', onPress: () => savePlan(meals.filter((m) => m.id !== meal.id)) },
+      { text: 'Excluir', style: 'destructive', onPress: () => saveOrAlert(meals.filter((m) => m.id !== meal.id)) },
     ]);
   };
 
@@ -283,18 +303,14 @@ export default function DietaScreen() {
       const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
-      const { meals: extracted, error } = await storage.extractMealsFromPdf(base64);
-      if (error) {
-        Alert.alert('Não foi possível ler o PDF', error);
-        return;
-      }
+      const extracted = await storage.extractMealsFromPdf(base64);
       if (extracted.length === 0) {
         Alert.alert('Nenhuma refeição encontrada', 'Não conseguimos identificar refeições nesse PDF. Tente montar o plano manualmente.');
         return;
       }
       setPdfDrafts(extracted);
-    } catch {
-      Alert.alert('Erro', 'Não foi possível processar o arquivo. Tente novamente.');
+    } catch (e) {
+      Alert.alert('Não foi possível ler o PDF', errorMessage(e, 'Não foi possível processar o arquivo. Tente novamente.'));
     } finally {
       setImporting(false);
     }
@@ -308,11 +324,10 @@ export default function DietaScreen() {
   const handleConfirmDrafts = async () => {
     if (!pdfDrafts || pdfDrafts.length === 0) return;
     const newMeals: Meal[] = pdfDrafts.map((draft, i) => ({
-      id: `pdf_${Date.now()}_${i}`,
+      id: `pdf_${Date.now().toString(36)}_${i}_${Math.random().toString(36).slice(2)}`,
       ...draft,
     }));
-    await savePlan([...meals, ...newMeals]);
-    setPdfDrafts(null);
+    if (await saveOrAlert([...meals, ...newMeals])) setPdfDrafts(null);
   };
 
   return (
@@ -324,7 +339,7 @@ export default function DietaScreen() {
             {meals.length === 0 ? 'Nenhum plano cadastrado' : `${doneCount} de ${meals.length} refeições hoje`}
           </Text>
         </View>
-        <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPdf} disabled={importing}>
+        <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPdf} disabled={importing} accessibilityRole="button" accessibilityLabel="Importar plano alimentar em PDF">
           {importing ? (
             <ActivityIndicator size="small" color={colors.primary} />
           ) : (
@@ -340,7 +355,7 @@ export default function DietaScreen() {
           <MealCard
             meal={item}
             checkin={checkinFor(item.id, todayCheckins)}
-            onCheckIn={(status) => checkIn(item.id, status)}
+            onCheckIn={(status) => handleCheckIn(item.id, status)}
             onEdit={() => openEdit(item)}
             onDelete={() => handleDelete(item)}
           />
@@ -349,7 +364,16 @@ export default function DietaScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          !isLoading ? (
+          loadError ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyIcon}>⚠️</Text>
+              <Text style={styles.emptyText}>Não foi possível carregar seu plano</Text>
+              <Text style={styles.emptySubtext}>{loadError}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={refresh} accessibilityRole="button">
+                <Text style={styles.retryBtnText}>Tentar de novo</Text>
+              </TouchableOpacity>
+            </View>
+          ) : !isLoading ? (
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>🍽️</Text>
               <Text style={styles.emptyText}>Nenhum plano alimentar ainda</Text>
@@ -359,7 +383,7 @@ export default function DietaScreen() {
         }
       />
 
-      <TouchableOpacity style={styles.fab} onPress={openAdd} activeOpacity={0.85}>
+      <TouchableOpacity style={styles.fab} onPress={openAdd} activeOpacity={0.85} accessibilityRole="button" accessibilityLabel="Adicionar refeição">
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
@@ -383,6 +407,8 @@ export default function DietaScreen() {
 }
 
 const styles = StyleSheet.create({
+  retryBtn: { marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, minHeight: 44, justifyContent: 'center' },
+  retryBtnText: { color: '#fff', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   container: { flex: 1, backgroundColor: colors.background },
   header: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },

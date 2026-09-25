@@ -1,62 +1,46 @@
-import { storage, API_BASE, authHeaders } from './storage';
+import { storage } from './storage';
 import { AIService } from './ai';
-import { ExtractedData } from '../types';
+import { errorMessage } from './api';
 
-async function checkBackend(): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/api/extract`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': 'healthcheck' },
-      body: JSON.stringify({ message: 'ping' }),
-    });
-    const text = await res.text();
-    return text.startsWith('{');
-  } catch {
-    return false;
-  }
-}
-
+// Extrai dados das mensagens do usuário que ainda não foram processadas.
+// Cada extração é vinculada ao ID da mensagem no servidor (idempotente):
+// antes, "processada" era adivinhado pela proximidade de horário, o que
+// pulava mensagens distintas ou duplicava extrações demoradas.
 export async function reprocessHistory(
   onProgress?: (current: number, total: number) => void
-): Promise<{ processed: number; dataPoints: number; error?: string }> {
-  const alive = await checkBackend();
-  if (!alive) {
-    return { processed: 0, dataPoints: 0, error: 'Backend offline. Reinicie com: node server/index.js' };
+): Promise<{ processed: number; dataPoints: number; failed: number; error?: string }> {
+  let messages;
+  try {
+    messages = await storage.getAllMessages();
+  } catch (e) {
+    return { processed: 0, dataPoints: 0, failed: 0, error: errorMessage(e) };
   }
 
-  const [messages, existingData] = await Promise.all([
-    storage.getMessages(),
-    storage.getExtractedData(),
-  ]);
-
-  const userMessages = messages.filter((m) => m.role === 'user');
-  if (userMessages.length === 0) return { processed: 0, dataPoints: 0 };
-
-  const unprocessed = userMessages.filter((msg) =>
-    !existingData.some((d) => Math.abs(d.timestamp - msg.timestamp) < 10000)
+  const unprocessed = messages.filter(
+    (m) => m.role === 'user' && !m.extractedAt && m.content.trim() && m.content !== '📷 Imagem enviada'
   );
-
-  if (unprocessed.length === 0) return { processed: 0, dataPoints: 0 };
+  if (unprocessed.length === 0) return { processed: 0, dataPoints: 0, failed: 0 };
 
   const service = new AIService();
   let totalDataPoints = 0;
+  let failed = 0;
+  let lastError: string | undefined;
 
   for (let i = 0; i < unprocessed.length; i++) {
     onProgress?.(i + 1, unprocessed.length);
     try {
-      const extracted: ExtractedData[] = await service.extractData(unprocessed[i].content);
-      const tagged = extracted.map((d, j) => ({
-        ...d,
-        timestamp: unprocessed[i].timestamp + j + 1,
-      }));
-      if (tagged.length > 0) {
-        await storage.addExtractedData(tagged);
-        totalDataPoints += tagged.length;
-      }
+      const extracted = await service.extractData(unprocessed[i].content, unprocessed[i].id);
+      totalDataPoints += extracted.length;
     } catch (e) {
-      console.warn('Extraction failed for message:', unprocessed[i].content.slice(0, 50), e);
+      failed++;
+      lastError = errorMessage(e);
     }
   }
 
-  return { processed: unprocessed.length, dataPoints: totalDataPoints };
+  return {
+    processed: unprocessed.length - failed,
+    dataPoints: totalDataPoints,
+    failed,
+    error: failed === unprocessed.length ? lastError : undefined,
+  };
 }

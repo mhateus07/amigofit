@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, FlatList, StyleSheet, RefreshControl, Dimensions, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Polyline, Circle, Text as SvgText, Line as SvgLine } from 'react-native-svg';
@@ -9,6 +10,7 @@ import { format, subDays, isAfter, startOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { ExtractedData, UserProfile, AiInsight, Message } from '../types';
 import { storage } from '../services/storage';
+import { errorMessage, isStaleSession } from '../services/api';
 import { AIService } from '../services/ai';
 import { colors, spacing, radius, fontSize } from '../constants/theme';
 import { CATEGORY_CONFIG, CATEGORY_KEYS } from '../constants/categories';
@@ -441,7 +443,7 @@ function AchievementsSection({ messages, data }: { messages: Message[]; data: Ex
 }
 
 // ── Card de insight ────────────────────────────────────────
-function StatCard({ icon, value, label, color }: { icon: string; value: number; label: string; color: string }) {
+function StatCard({ icon, value, label, color }: { icon: string; value: number | string; label: string; color: string }) {
   return (
     <View style={styles.statCard}>
       <Text style={styles.statIcon}>{icon}</Text>
@@ -568,6 +570,15 @@ async function exportDataAsPdf(data: ExtractedData[], profile: UserProfile | nul
   }
 }
 
+// Assinatura curta dos registros (djb2) para invalidar o cache de insights
+// sempre que qualquer registro mudar — não só quando muda a quantidade.
+function dataSignature(data: ExtractedData[]): string {
+  let hash = 5381;
+  const text = data.map((d) => `${d.id ?? ''}|${d.timestamp}|${d.category}|${d.label}|${d.value}`).sort().join('\n');
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  return `${data.length}:${(hash >>> 0).toString(36)}`;
+}
+
 // ── Tela principal ─────────────────────────────────────────
 export default function InsightsScreen() {
   const [data, setData] = useState<ExtractedData[]>([]);
@@ -577,14 +588,22 @@ export default function InsightsScreen() {
   const [aiInsights, setAiInsights] = useState<Insight[] | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
+
   const loadInsights = async (currentData: ExtractedData[], currentProfile: UserProfile | null, force: boolean) => {
+    setInsightsError(null);
     if (currentData.length < 3) { setAiInsights(null); return; }
     if (!(await storage.hasAnyApiKey())) { setAiInsights(null); return; }
 
+    // O cache vale para o mesmo dia e exatamente os mesmos dados (assinatura
+    // dos registros, não só a quantidade), e é separado por conta.
     const today = format(new Date(), 'yyyy-MM-dd');
+    const signature = dataSignature(currentData);
     if (!force) {
       const cached = await storage.getCachedInsights();
-      if (cached && cached.date === today && cached.count === currentData.length) {
+      if (cached && cached.date === today && cached.signature === signature) {
         setAiInsights(cached.insights.map(aiToInsight));
         return;
       }
@@ -594,33 +613,57 @@ export default function InsightsScreen() {
     try {
       const generated = await aiService.generateInsights(currentData, currentProfile);
       if (generated.length > 0) {
-        await storage.saveCachedInsights({ date: today, count: currentData.length, insights: generated });
+        await storage.saveCachedInsights({ date: today, signature, insights: generated });
         setAiInsights(generated.map(aiToInsight));
       } else {
         setAiInsights(null);
       }
-    } catch {
+    } catch (e) {
+      if (isStaleSession(e)) return;
+      // Mostra os insights automáticos, mas avisa que a IA falhou.
       setAiInsights(null);
+      setInsightsError(errorMessage(e));
     } finally {
       setInsightsLoading(false);
     }
   };
 
   const refreshData = async (force: boolean) => {
-    const [d, p, m] = await Promise.all([storage.getExtractedData(), storage.getProfile(), storage.getMessages()]);
-    setData(d);
-    setProfile(p);
-    setMessages(m);
-    await loadInsights(d, p, force);
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const [d, p, m] = await Promise.all([storage.getExtractedData(), storage.getProfile(), storage.getAllMessages()]);
+      const known = d.filter((item) => CATEGORY_CONFIG[item.category]);
+      setData(known);
+      setProfile(p);
+      setMessages(m);
+      setLoadError(null);
+      await loadInsights(known, p, force);
+    } catch (e) {
+      if (!isStaleSession(e)) setLoadError(errorMessage(e));
+    } finally {
+      loadingRef.current = false;
+    }
   };
-  useEffect(() => { refreshData(false); }, []);
+  // Recarrega ao voltar para a aba: novos registros aparecem sem puxar a tela.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useFocusEffect(useCallback(() => { refreshData(false); }, []));
   const onRefresh = async () => { setRefreshing(true); await refreshData(true); setRefreshing(false); };
 
   const insights = aiInsights ?? generateHeuristicInsights(data);
   const last30 = data.filter((d) => isAfter(d.timestamp, subDays(Date.now(), 30)));
+  const weeklyGoal = profile?.weeklyWorkoutGoal ?? 3;
+  const workoutDays = new Set(
+    data
+      .filter((d) => d.category === 'workout' && isAfter(d.timestamp, subDays(Date.now(), 7)))
+      .map((d) => startOfDay(d.timestamp).getTime())
+  );
+  const workoutsLast7 = workoutDays.size;
 
   const statsItems = [
-    { icon: '📊', value: data.length, label: 'Total', color: colors.text },
+    // Adesão à meta semanal, em vez da quantidade total de registros (que
+    // sozinha não indica melhora).
+    { icon: '🎯', value: `${workoutsLast7}/${weeklyGoal}`, label: 'Treinos 7d', color: workoutsLast7 >= weeklyGoal ? colors.primary : colors.text },
     { icon: '🌙', value: data.filter((d) => d.category === 'sleep').length, label: 'Sono', color: '#9C7FE8' },
     { icon: '🥗', value: data.filter((d) => d.category === 'nutrition').length, label: 'Refeições', color: '#FF7B7B' },
     { icon: '🔥', value: data.filter((d) => d.category === 'workout').length, label: 'Treinos', color: '#FF7043' },
@@ -651,7 +694,7 @@ export default function InsightsScreen() {
       type: 'sectionTitle',
       title: insightsLoading
         ? 'Gerando insights com IA...'
-        : `${insights.length} insight${insights.length !== 1 ? 's' : ''} identificado${insights.length !== 1 ? 's' : ''}${aiInsights ? ' · IA' : ''}`,
+        : `${insights.length} insight${insights.length !== 1 ? 's' : ''} identificado${insights.length !== 1 ? 's' : ''}${aiInsights ? ' · IA' : ''}${insightsError ? ` · IA indisponível: ${insightsError}` : ''}`,
     },
     ...insights.map((insight) => ({ type: 'insight' as const, insight })),
     { type: 'share' },
@@ -664,6 +707,14 @@ export default function InsightsScreen() {
         <Text style={styles.title}>Insights</Text>
         <Text style={styles.subtitle}>Últimos 30 dias · {last30.length} registros</Text>
       </View>
+      {loadError && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>Não foi possível atualizar: {loadError}</Text>
+          <TouchableOpacity onPress={() => refreshData(false)} accessibilityRole="button" style={styles.errorBannerBtn}>
+            <Text style={styles.errorBannerBtnText}>Tentar de novo</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <FlatList
         data={listData}
         keyExtractor={(item, i) => item.type + i}
@@ -715,6 +766,10 @@ export default function InsightsScreen() {
 }
 
 const styles = StyleSheet.create({
+  errorBanner: { marginHorizontal: spacing.md, marginBottom: spacing.sm, padding: spacing.sm, borderRadius: radius.md, backgroundColor: '#FDECEA', flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  errorBannerText: { flex: 1, color: colors.error, fontSize: fontSize.sm },
+  errorBannerBtn: { minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing.sm },
+  errorBannerBtnText: { color: colors.error, fontSize: fontSize.sm, fontWeight: '700' },
   container:    { flex: 1, backgroundColor: colors.background },
   header:       { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs },
   title:        { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },

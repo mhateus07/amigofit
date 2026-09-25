@@ -22,7 +22,8 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { Exercise, WorkoutPlan, WorkoutCheckin } from '../types';
 import { useWorkoutPlan } from '../hooks/useWorkoutPlan';
 import { storage, getToken, exerciseVideoUrl } from '../services/storage';
-import { colors, spacing, radius, fontSize } from '../constants/theme';
+import { errorMessage } from '../services/api';
+import { colors, spacing, radius, fontSize, fontFamily } from '../constants/theme';
 
 type WorkoutDraft = Omit<WorkoutPlan, 'id'>;
 
@@ -101,21 +102,20 @@ function ExerciseEditorRow({
     setUploadingVideo(true);
     try {
       const asset = result.assets[0];
-      const { id, error } = await storage.uploadExerciseVideo(asset.uri, asset.mimeType || 'video/mp4');
-      if (error || !id) {
-        Alert.alert('Erro ao enviar vídeo', error || 'Tente novamente.');
-        return;
-      }
+      const id = await storage.uploadExerciseVideo(asset.uri, asset.mimeType || 'video/mp4');
       onChange({ ...exercise, videoId: id });
+    } catch (e) {
+      Alert.alert('Erro ao enviar vídeo', errorMessage(e));
     } finally {
       setUploadingVideo(false);
     }
   };
 
+  // Só desvincula: se o usuário cancelar a edição, a ficha salva continua
+  // apontando para o vídeo. Vídeos que nenhuma ficha usa são apagados pela
+  // limpeza diária do servidor.
   const removeVideo = () => {
-    const videoId = exercise.videoId;
     onChange({ ...exercise, videoId: undefined });
-    if (videoId) storage.deleteExerciseVideo(videoId).catch(() => {});
   };
 
   return (
@@ -409,7 +409,7 @@ function WorkoutReviewModal({
 }
 
 export default function TreinoScreen() {
-  const { plans, todayCheckins, isLoading, savePlans, checkIn, refresh } = useWorkoutPlan();
+  const { plans, todayCheckins, isLoading, loadError, savePlans, checkIn, refresh } = useWorkoutPlan();
   const [refreshing, setRefreshing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingPlan, setEditingPlan] = useState<WorkoutPlan | null>(null);
@@ -426,6 +426,25 @@ export default function TreinoScreen() {
   const openEdit = (plan: WorkoutPlan) => { setEditingPlan(plan); setEditingDraftIndex(null); setFormVisible(true); };
   const openEditDraft = (index: number) => { setEditingPlan(null); setEditingDraftIndex(index); setFormVisible(true); };
 
+  // Gravações que o servidor recusou são desfeitas pelo hook; aqui só avisamos.
+  const saveOrAlert = async (next: WorkoutPlan[]): Promise<boolean> => {
+    try {
+      await savePlans(next);
+      return true;
+    } catch (e) {
+      Alert.alert('Não foi possível salvar', errorMessage(e));
+      return false;
+    }
+  };
+
+  const handleCheckIn = async (planId: string, status: 'done' | 'skipped') => {
+    try {
+      await checkIn(planId, status);
+    } catch (e) {
+      Alert.alert('Check-in não registrado', errorMessage(e));
+    }
+  };
+
   const handleFormSave = async (data: WorkoutDraft) => {
     if (editingDraftIndex !== null && pdfDrafts) {
       const updated = [...pdfDrafts];
@@ -433,10 +452,10 @@ export default function TreinoScreen() {
       setPdfDrafts(updated);
       setEditingDraftIndex(null);
     } else if (editingPlan) {
-      await savePlans(plans.map((p) => (p.id === editingPlan.id ? { ...p, ...data } : p)));
+      if (!(await saveOrAlert(plans.map((p) => (p.id === editingPlan.id ? { ...p, ...data } : p))))) return;
     } else {
-      const newPlan: WorkoutPlan = { id: `local_${Date.now()}`, ...data };
-      await savePlans([...plans, newPlan]);
+      const newPlan: WorkoutPlan = { id: `wp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`, ...data };
+      if (!(await saveOrAlert([...plans, newPlan]))) return;
     }
     setFormVisible(false);
     setEditingPlan(null);
@@ -445,15 +464,11 @@ export default function TreinoScreen() {
   const handleDelete = (plan: WorkoutPlan) => {
     Alert.alert('Excluir ficha', `Remover "${plan.name}"?`, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Excluir', style: 'destructive', onPress: () => savePlans(plans.filter((p) => p.id !== plan.id)) },
+      { text: 'Excluir', style: 'destructive', onPress: () => saveOrAlert(plans.filter((p) => p.id !== plan.id)) },
     ]);
   };
 
-  const applyExtractedDrafts = (extracted: Omit<WorkoutPlan, 'id'>[], error?: string): boolean => {
-    if (error) {
-      Alert.alert('Não foi possível ler o arquivo', error);
-      return false;
-    }
+  const applyExtractedDrafts = (extracted: Omit<WorkoutPlan, 'id'>[]): boolean => {
     if (extracted.length === 0) {
       Alert.alert('Nenhuma ficha encontrada', 'Não conseguimos identificar exercícios. Tente montar a ficha manualmente.');
       return false;
@@ -474,10 +489,9 @@ export default function TreinoScreen() {
       const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
-      const { plans: extracted, error } = await storage.extractWorkoutFromPdf(base64);
-      applyExtractedDrafts(extracted, error);
-    } catch {
-      Alert.alert('Erro', 'Não foi possível processar o arquivo. Tente novamente.');
+      applyExtractedDrafts(await storage.extractWorkoutFromPdf(base64));
+    } catch (e) {
+      Alert.alert('Não foi possível ler o arquivo', errorMessage(e, 'Não foi possível processar o arquivo. Tente novamente.'));
     } finally {
       setImporting(false);
     }
@@ -495,10 +509,9 @@ export default function TreinoScreen() {
     setImporting(true);
     try {
       const asset = result.assets[0];
-      const { plans: extracted, error } = await storage.extractWorkoutFromImage(asset.base64!, asset.mimeType || 'image/jpeg');
-      applyExtractedDrafts(extracted, error);
-    } catch {
-      Alert.alert('Erro', 'Não foi possível processar a foto. Tente novamente.');
+      applyExtractedDrafts(await storage.extractWorkoutFromImage(asset.base64!, asset.mimeType || 'image/jpeg'));
+    } catch (e) {
+      Alert.alert('Não foi possível ler a foto', errorMessage(e, 'Não foi possível processar a foto. Tente novamente.'));
     } finally {
       setImporting(false);
     }
@@ -512,11 +525,10 @@ export default function TreinoScreen() {
   const handleConfirmDrafts = async () => {
     if (!pdfDrafts || pdfDrafts.length === 0) return;
     const newPlans: WorkoutPlan[] = pdfDrafts.map((draft, i) => ({
-      id: `pdf_${Date.now()}_${i}`,
+      id: `pdf_${Date.now().toString(36)}_${i}_${Math.random().toString(36).slice(2)}`,
       ...draft,
     }));
-    await savePlans([...plans, ...newPlans]);
-    setPdfDrafts(null);
+    if (await saveOrAlert([...plans, ...newPlans])) setPdfDrafts(null);
   };
 
   return (
@@ -529,10 +541,10 @@ export default function TreinoScreen() {
           </Text>
         </View>
         <View style={styles.headerBtns}>
-          <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPdf} disabled={importing}>
+          <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPdf} disabled={importing} accessibilityRole="button" accessibilityLabel="Importar ficha em PDF">
             {importing ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.pdfBtnText}>📄 PDF</Text>}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPhoto} disabled={importing}>
+          <TouchableOpacity style={styles.pdfBtn} onPress={handleUploadPhoto} disabled={importing} accessibilityRole="button" accessibilityLabel="Importar ficha por foto">
             <Text style={styles.pdfBtnText}>📷 Foto</Text>
           </TouchableOpacity>
         </View>
@@ -545,7 +557,7 @@ export default function TreinoScreen() {
           <WorkoutCard
             plan={item}
             checkin={checkinFor(item.id, todayCheckins)}
-            onCheckIn={(status) => checkIn(item.id, status)}
+            onCheckIn={(status) => handleCheckIn(item.id, status)}
             onEdit={() => openEdit(item)}
             onDelete={() => handleDelete(item)}
             onViewVideo={setViewingVideoId}
@@ -555,7 +567,16 @@ export default function TreinoScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          !isLoading ? (
+          loadError ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyIcon}>⚠️</Text>
+              <Text style={styles.emptyText}>Não foi possível carregar suas fichas</Text>
+              <Text style={styles.emptySubtext}>{loadError}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={refresh} accessibilityRole="button">
+                <Text style={styles.retryBtnText}>Tentar de novo</Text>
+              </TouchableOpacity>
+            </View>
+          ) : !isLoading ? (
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>🏋️</Text>
               <Text style={styles.emptyText}>Nenhuma ficha de treino ainda</Text>
@@ -565,7 +586,7 @@ export default function TreinoScreen() {
         }
       />
 
-      <TouchableOpacity style={styles.fab} onPress={openAdd} activeOpacity={0.85}>
+      <TouchableOpacity style={styles.fab} onPress={openAdd} activeOpacity={0.85} accessibilityRole="button" accessibilityLabel="Adicionar ficha de treino">
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
@@ -591,6 +612,8 @@ export default function TreinoScreen() {
 }
 
 const styles = StyleSheet.create({
+  retryBtn: { marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, minHeight: 44, justifyContent: 'center' },
+  retryBtnText: { color: '#fff', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   container: { flex: 1, backgroundColor: colors.background },
   header: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xs, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },

@@ -8,11 +8,13 @@ const CHECKIN_STATUSES = ['done', 'skipped'];
 
 function validateMeal(m) {
   if (!m || typeof m !== 'object') throw new HttpError(400, 'refeição inválida');
-  if (!isValidTime(m.time)) throw new HttpError(400, 'time deve estar no formato HH:mm');
+  // Aceita "7:30" (planos salvos por versões antigas) e normaliza para "07:30".
+  const time = typeof m.time === 'string' ? m.time.trim().padStart(5, '0') : m.time;
+  if (!isValidTime(time)) throw new HttpError(400, 'time deve estar no formato HH:mm');
   return {
     id: m.id === undefined ? undefined : text(m.id, 'id', { max: 100 }),
     name: text(m.name, 'name', { max: 100 }),
-    time: m.time,
+    time,
     description: text(m.description, 'description', { max: 1000, optional: true }),
     items: arrayOf(m.items ?? [], 'items', { max: 50 }).map((i) => text(i, 'item', { max: 200 })),
     source: oneOf(m.source, 'source', ['pdf', 'manual'], { optional: true, fallback: 'manual' }),

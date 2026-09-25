@@ -1,37 +1,107 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Message, UserProfile } from '../types';
-
-const uuidv4 = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 import { storage } from '../services/storage';
 import { AIService } from '../services/ai';
+import { errorMessage, isStaleSession } from '../services/api';
+
+const uuidv4 = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 const aiService = new AIService();
+
+const PAGE_SIZE = 100;
+
+export type ChatLoadState = 'loading' | 'ready' | 'error';
+
+function friendlyAiError(errText: string): string {
+  const isBilling = errText.includes('credit balance') || errText.includes('insufficient_quota');
+  const isMissingKey = errText.includes('API key ausente');
+  const isAuth = (errText.includes('invalid') && errText.includes('key')) || errText.includes('authentication') || errText.includes('401');
+  if (isBilling) return 'Saldo insuficiente na API. Acesse o painel do seu provedor para adicionar créditos.';
+  if (isMissingKey) return 'Para ativar a IA, vá em Perfil → Configuração da IA e adicione sua chave de API.';
+  if (isAuth) return 'Chave de API inválida. Vá em Perfil → Configuração da IA e verifique sua chave.';
+  return `Erro: ${errText}`;
+}
 
 export function useChat(profile: UserProfile | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const initialized = useRef(false);
+  const [loadState, setLoadState] = useState<ChatLoadState>('loading');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const messagesRef = useRef<Message[]>([]);
+  messagesRef.current = messages;
+
+  const patchMessage = useCallback((id: string, patch: Partial<Message>) => {
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }, []);
+
+  // Grava uma mensagem; em caso de falha ela fica marcada na tela com a opção
+  // de tentar de novo, em vez de parecer salva.
+  const persist = useCallback(async (message: Message): Promise<boolean> => {
+    try {
+      await storage.saveMessage(message);
+      patchMessage(message.id, { saveFailed: false });
+      return true;
+    } catch (e) {
+      if (isStaleSession(e)) return false;
+      patchMessage(message.id, { saveFailed: true });
+      return false;
+    }
+  }, [patchMessage]);
+
+  const welcome = useCallback((content: string): Message => ({
+    id: uuidv4(),
+    role: 'assistant',
+    content,
+    timestamp: Date.now(),
+  }), []);
+
+  const load = useCallback(async () => {
+    setLoadState('loading');
+    setLoadError(null);
+    try {
+      const page = await storage.getMessages({ limit: PAGE_SIZE });
+      setHasMore(page.hasMore);
+      if (page.messages.length > 0) {
+        setMessages(page.messages);
+      } else {
+        const first = welcome(`E aí${profile?.name ? `, ${profile.name}` : ''}! Sou o AmigoFit, seu parceiro de treino. Pode falar comigo sobre tudo: o que comeu, como dormiu, como foi o treino, o que tá sentindo. Tô aqui pra te ajudar! 💪`);
+        setMessages([first]);
+        persist(first);
+      }
+      setLoadState('ready');
+    } catch (e) {
+      if (isStaleSession(e)) return;
+      setLoadError(errorMessage(e));
+      setLoadState('error');
+    }
+  }, [profile?.name, persist, welcome]);
 
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
-    const init = async () => {
-      const saved = await storage.getMessages();
-      if (saved.length > 0) {
-        setMessages(saved);
-      } else {
-        const welcome: Message = {
-          id: uuidv4(),
-          role: 'assistant',
-          content: `E aí${profile?.name ? `, ${profile.name}` : ''}! Sou o AmigoFit, seu parceiro de treino. Pode falar comigo sobre tudo: o que comeu, como dormiu, como foi o treino, o que tá sentindo. Tô aqui pra te ajudar! 💪`,
-          timestamp: Date.now(),
-        };
-        setMessages([welcome]);
-        await storage.saveMessages([welcome]);
-      }
-    };
-    init();
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const loadMore = useCallback(async () => {
+    const oldest = messagesRef.current[0];
+    if (!hasMore || loadingMore || !oldest) return;
+    setLoadingMore(true);
+    try {
+      const page = await storage.getMessages({ limit: PAGE_SIZE, before: oldest.timestamp });
+      setMessages((prev) => [...page.messages, ...prev]);
+      setHasMore(page.hasMore);
+    } catch {
+      // Mantém o que já está na tela; o usuário pode rolar de novo para tentar.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore]);
+
+  const retrySave = useCallback(async (id: string) => {
+    const message = messagesRef.current.find((m) => m.id === id);
+    if (message) await persist(message);
+  }, [persist]);
 
   const sendMessage = useCallback(
     async (text: string, imageBase64?: string, imageMimeType?: string, imageUri?: string) => {
@@ -45,96 +115,79 @@ export function useChat(profile: UserProfile | null) {
         timestamp: Date.now(),
         imageUri,
       };
-
-      let conversationForAI: Message[] = [];
-      setMessages((prev) => {
-        const updated = [...prev, userMessage];
-        conversationForAI = updated;
-        storage.saveMessages(updated);
-        return updated;
-      });
+      const conversationForAI = [...messagesRef.current, userMessage];
+      setMessages(conversationForAI);
       setIsLoading(true);
 
       try {
-        const hasKey = await storage.hasAnyApiKey();
-        if (!hasKey) {
-          const noKeyMsg: Message = {
-            id: uuidv4(),
-            role: 'assistant',
-            content: 'Para ativar a IA, vá em Perfil → Configuração da IA e adicione sua chave de API.',
-            timestamp: Date.now(),
-          };
-          setMessages((prev) => {
-            const updated = [...prev, noKeyMsg];
-            storage.saveMessages(updated);
-            return updated;
-          });
-          return;
+        // Anexo: envia a imagem antes, para a mensagem salva apontar para ela.
+        let saved = false;
+        try {
+          if (imageBase64 && imageMimeType) {
+            userMessage.imageId = await storage.uploadChatImage(imageBase64, imageMimeType);
+            patchMessage(userMessage.id, { imageId: userMessage.imageId });
+          }
+          saved = await persist(userMessage);
+        } catch (e) {
+          if (isStaleSession(e)) return;
+          patchMessage(userMessage.id, { saveFailed: true });
         }
 
-        const diaryData = await storage.getExtractedData();
+        const diaryData = await storage.getExtractedData().catch(() => []);
+
+        // A extração só roda se a mensagem foi salva: os dados ficam vinculados
+        // a ela. Se falhar, a mensagem continua sem extractedAt e o
+        // "Reprocessar histórico" do Perfil pega ela depois.
+        const extraction = saved && text.trim()
+          ? aiService.extractData(text, userMessage.id).catch(() => [])
+          : Promise.resolve([]);
 
         const [aiResponse, extractedData] = await Promise.all([
           aiService.chat(conversationForAI, profile, diaryData, imageBase64, imageMimeType),
-          aiService.extractData(text),
+          extraction,
         ]);
+
+        if (extractedData.length > 0) {
+          patchMessage(userMessage.id, { extractedData, extractedAt: Date.now() });
+        }
 
         const assistantMessage: Message = {
           id: uuidv4(),
           role: 'assistant',
           content: aiResponse,
           timestamp: Date.now(),
-          extractedData: extractedData.length > 0 ? extractedData : undefined,
         };
-
-        setMessages((prev) => {
-          const updated = [...prev, assistantMessage];
-          storage.saveMessages(updated);
-          return updated;
-        });
-
-        if (extractedData.length > 0) {
-          await storage.addExtractedData(extractedData);
-        }
+        setMessages((prev) => [...prev, assistantMessage]);
+        await persist(assistantMessage);
       } catch (error) {
-        const errText = error instanceof Error ? error.message : String(error);
-        const isBilling = errText.includes('credit balance') || errText.includes('insufficient_quota');
-        const isAuth = errText.includes('invalid') && errText.includes('key') || errText.includes('authentication') || errText.includes('401');
+        if (isStaleSession(error)) return;
+        // Mensagem de erro só na tela: não vai para o histórico salvo.
         const errorMsg: Message = {
           id: uuidv4(),
           role: 'assistant',
-          content: isBilling
-            ? 'Saldo insuficiente na API. Acesse o painel do seu provedor para adicionar créditos.'
-            : isAuth
-            ? 'Chave de API inválida. Vá em Perfil → Configuração da IA e verifique sua chave.'
-            : `Erro: ${errText}`,
+          content: friendlyAiError(errorMessage(error)),
           timestamp: Date.now(),
         };
-        setMessages((prev) => {
-          const updated = [...prev, errorMsg];
-          storage.saveMessages(updated);
-          return updated;
-        });
+        setMessages((prev) => [...prev, errorMsg]);
       } finally {
         setIsLoading(false);
       }
     },
-    [isLoading, profile]
+    [isLoading, profile, persist, patchMessage]
   );
 
+  // Lança erro se o servidor não confirmar — a tela avisa e mantém a conversa.
   const clearHistory = useCallback(async () => {
-    await storage.saveMessages([]);
-    initialized.current = false;
-    setMessages([]);
-    const welcome: Message = {
-      id: uuidv4(),
-      role: 'assistant',
-      content: `Conversa reiniciada! Tô aqui quando quiser${profile?.name ? `, ${profile.name}` : ''}. 💪`,
-      timestamp: Date.now(),
-    };
-    setMessages([welcome]);
-    await storage.saveMessages([welcome]);
-  }, [profile]);
+    await storage.clearMessages();
+    const first = welcome(`Conversa reiniciada! Tô aqui quando quiser${profile?.name ? `, ${profile.name}` : ''}. 💪`);
+    setMessages([first]);
+    setHasMore(false);
+    await persist(first);
+  }, [profile, persist, welcome]);
 
-  return { messages, isLoading, sendMessage, clearHistory };
+  return {
+    messages, isLoading, sendMessage, clearHistory,
+    loadState, loadError, reload: load,
+    hasMore, loadingMore, loadMore, retrySave,
+  };
 }
