@@ -409,7 +409,7 @@ function WorkoutReviewModal({
 }
 
 export default function TreinoScreen() {
-  const { plans, todayCheckins, isLoading, loadError, savePlans, checkIn, refresh } = useWorkoutPlan();
+  const { plans, todayCheckins, isLoading, loadError, offline, pendingIds, savePlans, checkIn, refresh } = useWorkoutPlan();
   const [refreshing, setRefreshing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingPlan, setEditingPlan] = useState<WorkoutPlan | null>(null);
@@ -550,6 +550,14 @@ export default function TreinoScreen() {
         </View>
       </View>
 
+      {(offline || pendingIds.length > 0) && (
+        <View style={styles.offlineBanner} accessibilityRole="alert">
+          <Text style={styles.offlineBannerText}>
+            {offline ? 'Sem conexão — mostrando a última versão salva no aparelho. ' : ''}
+            {pendingIds.length > 0 ? `${pendingIds.length} check-in(s) pendente(s) de sincronização.` : ''}
+          </Text>
+        </View>
+      )}
       <FlatList
         data={plans}
         keyExtractor={(p) => p.id}
@@ -612,6 +620,8 @@ export default function TreinoScreen() {
 }
 
 const styles = StyleSheet.create({
+  offlineBanner: { marginHorizontal: spacing.md, marginBottom: spacing.sm, padding: spacing.sm, borderRadius: radius.md, backgroundColor: '#FFF4E5' },
+  offlineBannerText: { color: '#8A5300', fontSize: fontSize.sm },
   retryBtn: { marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, minHeight: 44, justifyContent: 'center' },
   retryBtnText: { color: '#fff', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   container: { flex: 1, backgroundColor: colors.background },

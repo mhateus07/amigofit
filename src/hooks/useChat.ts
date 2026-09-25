@@ -185,8 +185,18 @@ export function useChat(profile: UserProfile | null) {
     await persist(first);
   }, [profile, persist, welcome]);
 
+  // "Não era isso": remove do Diário os registros que a IA extraiu da mensagem.
+  const discardExtraction = useCallback(async (messageId: string) => {
+    const message = messagesRef.current.find((m) => m.id === messageId);
+    const items = message?.extractedData ?? [];
+    for (const item of items) {
+      if (item.id) await storage.deleteExtractedData(item.id);
+    }
+    patchMessage(messageId, { extractedData: [] });
+  }, [patchMessage]);
+
   return {
-    messages, isLoading, sendMessage, clearHistory,
+    messages, isLoading, sendMessage, clearHistory, discardExtraction,
     loadState, loadError, reload: load,
     hasMore, loadingMore, loadMore, retrySave,
   };

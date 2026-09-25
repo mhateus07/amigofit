@@ -69,9 +69,35 @@ function AIText({ content }: { content: string }) {
   );
 }
 
-function MessageBubble({ message, token, onRetry }: { message: Message; token: string | null; onRetry: (id: string) => void }) {
+function MessageBubble({ message, token, onRetry, onDiscardExtraction }: {
+  message: Message;
+  token: string | null;
+  onRetry: (id: string) => void;
+  onDiscardExtraction: (id: string) => Promise<void>;
+}) {
   const isUser = message.role === 'user';
   const time = format(message.timestamp, 'HH:mm', { locale: ptBR });
+
+  // A IA mostra o que entendeu da mensagem e deixa descartar antes de o
+  // registro virar histórico definitivo.
+  const reviewExtraction = () => {
+    const items = message.extractedData ?? [];
+    const list = items.map((d) => `• ${d.label}: ${d.value}`).join('\n');
+    Alert.alert('Identifiquei estes registros', `${list}\n\nEles já estão no Diário. Pode corrigir cada um por lá.`, [
+      { text: 'Manter', style: 'cancel' },
+      {
+        text: 'Descartar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await onDiscardExtraction(message.id);
+          } catch (e) {
+            Alert.alert('Não foi possível descartar', errorMessage(e));
+          }
+        },
+      },
+    ]);
+  };
 
   const handleLongPress = () => {
     const text = message.content;
@@ -118,9 +144,16 @@ function MessageBubble({ message, token, onRetry }: { message: Message; token: s
         )}
         <Text style={[styles.timestamp, isUser && styles.timestampUser]}>{time}</Text>
         {message.extractedData && message.extractedData.length > 0 && (
-          <View style={styles.dataTag}>
-            <Text style={styles.dataTagText}>+{message.extractedData.length} dado(s) salvo(s)</Text>
-          </View>
+          <TouchableOpacity
+            style={styles.dataTag}
+            onPress={reviewExtraction}
+            accessibilityRole="button"
+            accessibilityLabel={`Identifiquei ${message.extractedData.length} registro(s). Tocar para revisar`}
+          >
+            <Text style={styles.dataTagText}>
+              Identifiquei {message.extractedData.length} registro{message.extractedData.length !== 1 ? 's' : ''} · revisar
+            </Text>
+          </TouchableOpacity>
         )}
         {message.saveFailed && (
           <TouchableOpacity
@@ -147,7 +180,7 @@ function formatDuration(ms: number): string {
 export default function ChatScreen({ profile }: Props) {
   const {
     messages, isLoading, sendMessage, clearHistory,
-    loadState, loadError, reload, hasMore, loadingMore, loadMore, retrySave,
+    loadState, loadError, reload, hasMore, loadingMore, loadMore, retrySave, discardExtraction,
   } = useChat(profile);
   const [inputText, setInputText] = useState('');
   const [token, setToken] = useState<string | null>(null);
@@ -287,7 +320,9 @@ export default function ChatScreen({ profile }: Props) {
           ref={listRef}
           data={messages}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <MessageBubble message={item} token={token} onRetry={retrySave} />}
+          renderItem={({ item }) => (
+            <MessageBubble message={item} token={token} onRetry={retrySave} onDiscardExtraction={discardExtraction} />
+          )}
           ListHeaderComponent={
             hasMore ? (
               <TouchableOpacity style={styles.loadMoreBtn} onPress={loadMore} disabled={loadingMore} accessibilityRole="button">

@@ -235,7 +235,7 @@ function PdfReviewModal({
 }
 
 export default function DietaScreen() {
-  const { meals, todayCheckins, isLoading, loadError, savePlan, checkIn, refresh } = useMealPlan();
+  const { meals, todayCheckins, isLoading, loadError, offline, pendingIds, savePlan, checkIn, refresh } = useMealPlan();
   const [refreshing, setRefreshing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingMeal, setEditingMeal] = useState<Meal | null>(null);
@@ -348,6 +348,14 @@ export default function DietaScreen() {
         </TouchableOpacity>
       </View>
 
+      {(offline || pendingIds.length > 0) && (
+        <View style={styles.offlineBanner} accessibilityRole="alert">
+          <Text style={styles.offlineBannerText}>
+            {offline ? 'Sem conexão — mostrando a última versão salva no aparelho. ' : ''}
+            {pendingIds.length > 0 ? `${pendingIds.length} check-in(s) pendente(s) de sincronização.` : ''}
+          </Text>
+        </View>
+      )}
       <FlatList
         data={sorted}
         keyExtractor={(m) => m.id}
@@ -407,6 +415,8 @@ export default function DietaScreen() {
 }
 
 const styles = StyleSheet.create({
+  offlineBanner: { marginHorizontal: spacing.md, marginBottom: spacing.sm, padding: spacing.sm, borderRadius: radius.md, backgroundColor: '#FFF4E5' },
+  offlineBannerText: { color: '#8A5300', fontSize: fontSize.sm },
   retryBtn: { marginTop: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, minHeight: 44, justifyContent: 'center' },
   retryBtnText: { color: '#fff', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   container: { flex: 1, backgroundColor: colors.background },

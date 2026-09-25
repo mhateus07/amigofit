@@ -119,8 +119,23 @@ router.patch('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) throw new HttpError(400, 'id inválido');
-  const { rowCount } = await pool.query('DELETE FROM extracted_data WHERE id=$1 AND user_id=$2', [id, req.userId]);
-  if (!rowCount) throw new HttpError(404, 'Registro não encontrado');
+  await withTransaction(async (db) => {
+    const { rows } = await db.query(
+      'DELETE FROM extracted_data WHERE id=$1 AND user_id=$2 RETURNING message_id',
+      [id, req.userId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Registro não encontrado');
+    // Mantém o resumo guardado na mensagem ("Identifiquei N registros") em
+    // sincronia com o Diário.
+    if (rows[0].message_id) {
+      await db.query(
+        `UPDATE messages SET extracted_data = (
+           SELECT jsonb_agg(e) FROM jsonb_array_elements(extracted_data) e WHERE (e->>'id')::int <> $3
+         ) WHERE id=$1 AND user_id=$2 AND jsonb_typeof(extracted_data) = 'array'`,
+        [rows[0].message_id, req.userId, id]
+      );
+    }
+  });
   res.json({ ok: true });
 });
 

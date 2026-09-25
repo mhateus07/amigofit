@@ -325,6 +325,11 @@ describe('diário', () => {
     expect(rows).toEqual([{ message_id: 'm1', source: 'chat', timestamp: '1001' }]);
     const msgs = await request(app).get('/api/messages').set('Authorization', A);
     expect(msgs.body.messages[0].extractedAt).toEqual(expect.any(Number));
+    expect(msgs.body.messages[0].extractedData).toHaveLength(1);
+    // Descartar o registro na revisão também o tira do resumo da mensagem.
+    await request(app).delete(`/api/extracted-data/${again.body.data[0].id}`).set('Authorization', A).expect(200);
+    const after = await request(app).get('/api/messages').set('Authorization', A);
+    expect(after.body.messages[0].extractedData).toBeUndefined();
     // Outra conta não consegue extrair para a mensagem de A.
     await request(app).post('/api/extract').set('Authorization', B).set('x-api-key', 'k')
       .send({ message: 'x', messageId: 'm1' }).expect(404);
