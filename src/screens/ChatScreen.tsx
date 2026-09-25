@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -184,7 +184,6 @@ export default function ChatScreen({ profile }: Props) {
   } = useChat(profile);
   const [inputText, setInputText] = useState('');
   const [token, setToken] = useState<string | null>(null);
-  const didInitialScroll = useRef(false);
   const [pendingImage, setPendingImage] = useState<{ uri: string; base64: string; mimeType: string } | null>(null);
   const listRef = useRef<FlatList>(null);
   const streak = calculateStreak(messages);
@@ -201,14 +200,12 @@ export default function ChatScreen({ profile }: Props) {
     getToken().then(setToken);
   }, []);
 
-  // Rola para o fim quando chega mensagem nova (não ao carregar as antigas).
-  const lastId = messages[messages.length - 1]?.id;
-  useEffect(() => {
-    if (!lastId) return;
-    const animated = didInitialScroll.current;
-    didInitialScroll.current = true;
-    setTimeout(() => listRef.current?.scrollToEnd({ animated }), 100);
-  }, [lastId]);
+  // Lista invertida (padrão de apps de mensagem): o "início" dela é a
+  // mensagem mais recente, então o chat sempre abre na última mensagem —
+  // ao abrir o app, trocar de aba ou carregar fotos — sem depender de
+  // scrollToEnd, que rodava antes do layout terminar e deixava a conversa
+  // parada no topo. Mensagem nova também aparece embaixo automaticamente.
+  const invertedMessages = useMemo(() => [...messages].reverse(), [messages]);
 
   const handleClear = () => {
     Alert.alert('Limpar conversa', 'Apagar todas as mensagens? Os dados já salvos no Diário continuam.', [
@@ -318,26 +315,18 @@ export default function ChatScreen({ profile }: Props) {
         {loadState === 'ready' && (
         <FlatList
           ref={listRef}
-          data={messages}
+          inverted
+          data={invertedMessages}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <MessageBubble message={item} token={token} onRetry={retrySave} onDiscardExtraction={discardExtraction} />
           )}
-          ListHeaderComponent={
-            hasMore ? (
-              <TouchableOpacity style={styles.loadMoreBtn} onPress={loadMore} disabled={loadingMore} accessibilityRole="button">
-                {loadingMore
-                  ? <ActivityIndicator size="small" color={colors.primary} />
-                  : <Text style={styles.loadMoreText}>Carregar mensagens anteriores</Text>}
-              </TouchableOpacity>
-            ) : null
-          }
           style={styles.list}
           contentContainerStyle={styles.messageList}
-          showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
-          ListFooterComponent={
+          ListHeaderComponent={
             isLoading ? (
               <View style={styles.typingIndicator}>
                 <View style={styles.avatar}>
@@ -349,6 +338,18 @@ export default function ChatScreen({ profile }: Props) {
               </View>
             ) : null
           }
+          ListFooterComponent={
+            hasMore ? (
+              <TouchableOpacity style={styles.loadMoreBtn} onPress={loadMore} disabled={loadingMore} accessibilityRole="button">
+                {loadingMore
+                  ? <ActivityIndicator size="small" color={colors.primary} />
+                  : <Text style={styles.loadMoreText}>Carregar mensagens anteriores</Text>}
+              </TouchableOpacity>
+            ) : null
+          }
+          // Rolar até o topo busca as mensagens anteriores automaticamente.
+          onEndReached={hasMore ? loadMore : undefined}
+          onEndReachedThreshold={0.2}
         />
         )}
 
@@ -465,7 +466,8 @@ const styles = StyleSheet.create({
   streakText: { color: '#B25E00', fontSize: fontSize.sm, fontFamily: fontFamily.semiBold },
   clearBtn: { paddingHorizontal: spacing.sm, paddingVertical: 2 },
   clearBtnText: { color: colors.textMuted, fontSize: fontSize.xs, fontFamily: fontFamily.regular },
-  messageList: { padding: spacing.md, paddingBottom: spacing.xl },
+  // Lista invertida: paddingTop aparece embaixo (perto do campo de texto).
+  messageList: { padding: spacing.md, paddingTop: spacing.xl },
   bubbleRow: { flexDirection: 'row', marginBottom: spacing.md, alignItems: 'flex-end', gap: spacing.sm },
   bubbleRowUser: { justifyContent: 'flex-end' },
   bubbleRowAI: { justifyContent: 'flex-start' },
