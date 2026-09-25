@@ -37,7 +37,6 @@ app.use(cors({
   preflightContinue: false,
   optionsSuccessStatus: 204,
 }));
-app.use(express.json({ limit: '15mb' }));
 
 // Log de acesso: método, rota (sem query string, que pode ter dados), status
 // e latência. Nunca o corpo da requisição.
@@ -52,6 +51,10 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// Depois do log de acesso, para requisições recusadas (ex.: 413) também
+// aparecerem no log.
+app.use(express.json({ limit: '15mb' }));
 
 // ── Health ────────────────────────────────────────────────
 // Confere o banco de verdade: o deploy usa isso para saber se subiu.

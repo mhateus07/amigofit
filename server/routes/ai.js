@@ -1,6 +1,7 @@
 const express = require('express');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { PDFParse } = require('pdf-parse');
+const multer = require('multer');
 const ai = require('../ai/providers');
 const aiKeys = require('../lib/aiKeys');
 const { HttpError, text, arrayOf } = require('../lib/http');
@@ -88,9 +89,9 @@ router.post('/insights', async (req, res) => {
   res.json({ insights });
 });
 
-async function pdfText(pdfBase64) {
+async function pdfText(buffer) {
   try {
-    const parser = new PDFParse({ data: Buffer.from(pdfBase64, 'base64') });
+    const parser = new PDFParse({ data: buffer });
     const result = await parser.getText();
     await parser.destroy();
     return result.text || '';
@@ -100,17 +101,55 @@ async function pdfText(pdfBase64) {
   }
 }
 
+// PDFs chegam como arquivo (multipart) — base64 dentro de JSON aumenta o
+// tamanho em ~33% e estourava o limite de 15 MB com fichas escaneadas.
+const MAX_PDF_BYTES = 30 * 1024 * 1024;
+const fileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_PDF_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/')) return cb(null, true);
+    cb(new HttpError(400, 'Envie um PDF ou uma foto'));
+  },
+});
+
+function receiveFile(req, res) {
+  return new Promise((resolve, reject) => {
+    fileUpload.single('file')(req, res, (err) => {
+      if (err?.code === 'LIMIT_FILE_SIZE') return reject(new HttpError(413, 'Arquivo grande demais (máx. 30 MB).'));
+      if (err) return reject(err instanceof HttpError ? err : new HttpError(400, err.message));
+      if (!req.file) return reject(new HttpError(400, 'Arquivo é obrigatório'));
+      resolve(req.file);
+    });
+  });
+}
+
+// PDF com texto → extração pelo texto (mais barata). PDF sem texto
+// (escaneado/foto) → o PDF inteiro vai para o modelo ler as páginas.
+async function extractFromPdf(req, config, buffer, { fromText, fromDocument }) {
+  const content = await pdfText(buffer);
+  if (content === null) throw new HttpError(422, 'Não conseguimos ler esse arquivo. Confira se é um PDF válido.');
+  if (content.trim().length >= 30) return withProvider(req, (c) => fromText(c, content), () => config);
+  return withProvider(req, (c) => fromDocument(c, buffer.toString('base64')), () => config);
+}
+
+const MEALS = { fromText: ai.extractMeals, fromDocument: ai.extractMealsFromPdfDocument };
+const WORKOUT = { fromText: ai.extractWorkoutFromText, fromDocument: ai.extractWorkoutFromPdfDocument };
+
 router.post('/extract-meals', async (req, res) => {
   const { pdfBase64 } = req.body;
   if (!pdfBase64) throw new HttpError(400, 'pdfBase64 é obrigatório');
   // Confere a chave antes de ler o PDF, para falhar rápido.
   const config = await aiKeys.resolveAiConfig(req);
-  const content = await pdfText(pdfBase64);
-  if (content === null) throw new HttpError(422, 'Não conseguimos ler esse arquivo. Confira se é um PDF válido.');
-  if (content.trim().length < 30) {
-    throw new HttpError(422, 'Não conseguimos extrair texto deste PDF (pode ser uma imagem escaneada). Tente montar o plano manualmente.');
-  }
-  const meals = await withProvider(req, (c) => ai.extractMeals(c, content), () => config);
+  const meals = await extractFromPdf(req, config, Buffer.from(pdfBase64, 'base64'), MEALS);
+  res.json({ meals });
+});
+
+router.post('/extract-meals/file', async (req, res) => {
+  const config = await aiKeys.resolveAiConfig(req);
+  const file = await receiveFile(req, res);
+  if (file.mimetype !== 'application/pdf') throw new HttpError(400, 'Envie o plano em PDF');
+  const meals = await extractFromPdf(req, config, file.buffer, MEALS);
   res.json({ meals });
 });
 
@@ -123,13 +162,16 @@ router.post('/extract-workout', async (req, res) => {
     const plans = await withProvider(req, (c) => ai.extractWorkoutFromImage(c, imageBase64, mimeType || 'image/jpeg'), () => config);
     return res.json({ plans });
   }
+  const plans = await extractFromPdf(req, config, Buffer.from(pdfBase64, 'base64'), WORKOUT);
+  res.json({ plans });
+});
 
-  const content = await pdfText(pdfBase64);
-  if (content === null) throw new HttpError(422, 'Não conseguimos ler esse arquivo. Confira se é um PDF válido.');
-  if (content.trim().length < 30) {
-    throw new HttpError(422, 'Não conseguimos extrair texto deste PDF (pode ser uma imagem escaneada). Tente enviar como foto, ou montar a ficha manualmente.');
-  }
-  const plans = await withProvider(req, (c) => ai.extractWorkoutFromText(c, content), () => config);
+router.post('/extract-workout/file', async (req, res) => {
+  const config = await aiKeys.resolveAiConfig(req);
+  const file = await receiveFile(req, res);
+  const plans = file.mimetype === 'application/pdf'
+    ? await extractFromPdf(req, config, file.buffer, WORKOUT)
+    : await withProvider(req, (c) => ai.extractWorkoutFromImage(c, file.buffer.toString('base64'), file.mimetype), () => config);
   res.json({ plans });
 });
 

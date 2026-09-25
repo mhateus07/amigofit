@@ -17,7 +17,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { Exercise, WorkoutPlan, WorkoutCheckin } from '../types';
 import { useWorkoutPlan } from '../hooks/useWorkoutPlan';
@@ -520,8 +519,7 @@ export default function TreinoScreen() {
       for (const [i, file] of files.entries()) {
         setImportProgress(files.length > 1 ? `Lendo ${i + 1} de ${files.length}: ${file.name}` : `Lendo ${file.name}`);
         try {
-          const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
-          const plans = await storage.extractWorkoutFromPdf(base64);
+          const plans = await storage.extractWorkoutFromPdf(file.uri);
           // Nome do arquivo ("Treino B.pdf") quando a IA não achou um nome no PDF.
           const fileLabel = file.name.replace(/\.pdf$/i, '').trim();
           collected.push(...plans.map((p) => ({

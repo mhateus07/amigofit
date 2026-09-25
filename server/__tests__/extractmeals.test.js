@@ -64,17 +64,18 @@ describe('POST /api/extract-meals', () => {
     expect(res.status).toBe(400);
   });
 
-  it('retorna meals vazio com erro quando o PDF nao tem texto suficiente', async () => {
+  it('PDF escaneado (sem texto) com Groq pede para trocar de provedor, que lê imagem', async () => {
     mockGetText.mockResolvedValueOnce({ text: 'oi' });
 
     const res = await request(app)
       .post('/api/extract-meals')
       .set('Authorization', `Bearer ${authToken()}`)
       .set('x-api-key', 'fake-key')
+      .set('x-provider', 'groq')
       .send({ pdfBase64: 'aGVsbG8=' });
 
-    expect(res.status).toBe(422);
-    expect(res.body.error).toEqual(expect.any(String));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/escaneado/);
   });
 
   it('retorna meals vazio com erro quando o pdf-parse falha (arquivo invalido)', async () => {

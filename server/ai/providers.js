@@ -30,8 +30,9 @@ function groqReasoningOptions(provider) {
   return provider === 'groq' ? { reasoning_effort: 'low' } : {};
 }
 
+// Imagem ou PDF (documento): só provedores com visão leem.
 function hasImage(messages) {
-  return messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image'));
+  return messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image' || p.type === 'document'));
 }
 
 function toOpenAIMessages(messages, system) {
@@ -42,9 +43,15 @@ function toOpenAIMessages(messages, system) {
     } else {
       result.push({
         role: m.role,
-        content: m.content.map((part) => (part.type === 'image'
-          ? { type: 'image_url', image_url: { url: `data:${part.source.media_type};base64,${part.source.data}` } }
-          : { type: 'text', text: part.text })),
+        content: m.content.map((part) => {
+          if (part.type === 'image') {
+            return { type: 'image_url', image_url: { url: `data:${part.source.media_type};base64,${part.source.data}` } };
+          }
+          if (part.type === 'document') {
+            return { type: 'file', file: { filename: 'documento.pdf', file_data: `data:${part.source.media_type};base64,${part.source.data}` } };
+          }
+          return { type: 'text', text: part.text };
+        }),
       });
     }
   }
@@ -56,7 +63,7 @@ function toGeminiContents(messages) {
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: typeof m.content === 'string'
       ? [{ text: m.content }]
-      : m.content.map((part) => (part.type === 'image'
+      : m.content.map((part) => (part.type === 'image' || part.type === 'document'
         ? { inline_data: { mime_type: part.source.media_type, data: part.source.data } }
         : { text: part.text })),
   }));
@@ -277,6 +284,28 @@ function sanitizeMeals(meals) {
     }));
 }
 
+// PDF sem texto (escaneado): manda o arquivo inteiro para o modelo ler as
+// páginas como imagem. Groq não tem visão.
+function pdfDocumentPart(pdfBase64) {
+  return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } };
+}
+
+function requireVision(config, what) {
+  if (!VISION_PROVIDERS.includes(config.provider)) {
+    throw new HttpError(400, `Este PDF parece escaneado (sem texto) e o provedor Groq não lê imagens. Troque para Anthropic, OpenAI ou Gemini em Perfil → Configuração da IA para importar ${what}.`);
+  }
+}
+
+async function extractMealsFromPdfDocument(config, pdfBase64) {
+  requireVision(config, 'o plano');
+  const response = await callModel(config, {
+    messages: [{ role: 'user', content: [pdfDocumentPart(pdfBase64), { type: 'text', text: MEALS_PROMPT.replace('o texto extraído de um plano alimentar em PDF', 'o plano alimentar em PDF anexado') }] }],
+    maxTokens: 2048,
+    json: true,
+  });
+  return sanitizeMeals(parseJson(response, { meals: [] }).meals);
+}
+
 async function extractMeals(config, text) {
   const response = await callModel(config, {
     messages: [{ role: 'user', content: `${MEALS_PROMPT}\n\nTexto do PDF:\n"""${text}"""` }],
@@ -321,6 +350,17 @@ async function extractWorkoutFromText(config, text) {
     messages: [{ role: 'user', content: `${prompt}\n\nTexto do PDF:\n"""${text}"""` }],
     maxTokens: 2048,
     groqMaxTokens: 3072,
+    json: true,
+  });
+  return parseWorkoutPlansJson(response);
+}
+
+async function extractWorkoutFromPdfDocument(config, pdfBase64) {
+  requireVision(config, 'a ficha');
+  const prompt = WORKOUT_EXTRACTION_PROMPT.replace('{SOURCE}', 'o PDF anexado');
+  const response = await callModel(config, {
+    messages: [{ role: 'user', content: [pdfDocumentPart(pdfBase64), { type: 'text', text: prompt }] }],
+    maxTokens: 4096,
     json: true,
   });
   return parseWorkoutPlansJson(response);
@@ -402,8 +442,8 @@ async function transcribe(config, audioBase64, mimeType) {
 
 module.exports = {
   PROVIDERS, PROVIDER_MODELS, VISION_PROVIDERS, TRANSCRIPTION_PROVIDERS, CATEGORIES,
-  callModel, chat, extract, sanitizeExtracted, generateInsights, extractMeals,
-  extractWorkoutFromText, extractWorkoutFromImage, transcribe,
+  callModel, chat, extract, sanitizeExtracted, generateInsights, extractMeals, extractMealsFromPdfDocument,
+  extractWorkoutFromText, extractWorkoutFromPdfDocument, extractWorkoutFromImage, transcribe,
   // exportados para testes
   toOpenAIMessages, toGeminiContents, buildInsightsPrompt, parseWorkoutPlansJson,
 };

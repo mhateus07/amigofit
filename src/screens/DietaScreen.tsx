@@ -16,7 +16,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
 import { Meal, MealCheckin } from '../types';
 import { useMealPlan } from '../hooks/useMealPlan';
 import { errorMessage } from '../services/api';
@@ -304,10 +303,7 @@ export default function DietaScreen() {
 
     setImporting(true);
     try {
-      const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const extracted = await storage.extractMealsFromPdf(base64);
+      const extracted = await storage.extractMealsFromPdf(result.assets[0].uri);
       if (extracted.length === 0) {
         Alert.alert('Nenhuma refeição encontrada', 'Não conseguimos identificar refeições nesse PDF. Tente montar o plano manualmente.');
         return;

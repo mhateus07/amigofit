@@ -74,8 +74,11 @@ describe('POST /api/extract-workout', () => {
     expect(res.status).toBe(400);
   });
 
-  it('retorna plans vazio com erro quando o PDF nao tem texto suficiente', async () => {
+  it('PDF escaneado (sem texto) vai inteiro para o modelo como documento', async () => {
     mockGetText.mockResolvedValueOnce({ text: 'oi' });
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: JSON.stringify({ plans: [{ name: 'Treino A', exercises: [{ name: 'Agachamento', sets: 4 }] }] }) }],
+    });
 
     const res = await request(app)
       .post('/api/extract-workout')
@@ -83,8 +86,26 @@ describe('POST /api/extract-workout', () => {
       .set('x-api-key', 'fake-key')
       .send({ pdfBase64: 'aGVsbG8=' });
 
-    expect(res.status).toBe(422);
-    expect(res.body.error).toEqual(expect.any(String));
+    expect(res.status).toBe(200);
+    expect(res.body.plans[0].name).toBe('Treino A');
+    const content = mockCreate.mock.calls[0][0].messages[0].content;
+    expect(content[0]).toMatchObject({ type: 'document', source: { media_type: 'application/pdf', data: 'aGVsbG8=' } });
+  });
+
+  it('aceita o PDF como arquivo (multipart), sem base64 no JSON', async () => {
+    mockGetText.mockResolvedValueOnce({ text: 'Treino B - Costas\n1. Remada curvada 4x10\n2. Puxada frontal 3x12' });
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: JSON.stringify({ plans: [{ name: 'Treino B - Costas', exercises: [{ name: 'Remada curvada' }] }] }) }],
+    });
+
+    const res = await request(app)
+      .post('/api/extract-workout/file')
+      .set('Authorization', `Bearer ${authToken()}`)
+      .set('x-api-key', 'fake-key')
+      .attach('file', Buffer.from('%PDF-1.4 fake'), { filename: 'Treino B.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plans[0].name).toBe('Treino B - Costas');
   });
 
   it('retorna plans vazio com erro quando o pdf-parse falha (arquivo invalido)', async () => {

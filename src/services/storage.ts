@@ -179,10 +179,35 @@ async function getCheckins(date: string): Promise<MealCheckin[]> {
 async function checkInMeal(mealId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
   await apiRequest('/api/meal-plan/checkins', { method: 'POST', body: { mealId, date, status } });
 }
-async function extractMealsFromPdf(pdfBase64: string): Promise<Omit<Meal, 'id'>[]> {
-  const { meals } = await apiRequest<{ meals: Omit<Meal, 'id'>[] }>('/api/extract-meals', {
-    method: 'POST', body: { pdfBase64 }, timeoutMs: AI_TIMEOUT_MS,
-  });
+// Envia um arquivo (PDF/foto) como multipart para uma rota de extração por
+// IA. Antes o PDF ia em base64 dentro do JSON (+33% de tamanho) e PDFs
+// escaneados grandes estouravam o limite do servidor.
+async function uploadForExtraction<T>(path: string, fileUri: string, mimeType: string): Promise<T> {
+  const token = await getToken();
+  let res: FileSystem.FileSystemUploadResult;
+  try {
+    res = await FileSystem.uploadAsync(`${API_BASE}${path}`, fileUri, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName: 'file',
+      mimeType,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+  } catch {
+    throw new ApiError(0, 'Falha de conexão ao enviar o arquivo. Mantenha o app aberto durante o envio e tente novamente.');
+  }
+  let data: T & { error?: string } = {} as T & { error?: string };
+  try { data = JSON.parse(res.body || '{}'); } catch { /* corpo não-JSON (ex.: proxy) */ }
+  if (res.status < 200 || res.status >= 300) {
+    throw new ApiError(res.status, data.error || (res.status === 413
+      ? 'Arquivo grande demais (máx. 30 MB).'
+      : `Erro ${res.status} ao processar o arquivo.`));
+  }
+  return data;
+}
+
+async function extractMealsFromPdf(fileUri: string): Promise<Omit<Meal, 'id'>[]> {
+  const { meals } = await uploadForExtraction<{ meals: Omit<Meal, 'id'>[] }>('/api/extract-meals/file', fileUri, 'application/pdf');
   return meals;
 }
 
@@ -201,10 +226,8 @@ async function getWorkoutCheckins(date: string): Promise<WorkoutCheckin[]> {
 async function checkInWorkout(workoutPlanId: string, date: string, status: 'done' | 'skipped'): Promise<void> {
   await apiRequest('/api/workout-plans/checkins', { method: 'POST', body: { workoutPlanId, date, status } });
 }
-async function extractWorkoutFromPdf(pdfBase64: string): Promise<Omit<WorkoutPlan, 'id'>[]> {
-  const { plans } = await apiRequest<{ plans: Omit<WorkoutPlan, 'id'>[] }>('/api/extract-workout', {
-    method: 'POST', body: { pdfBase64 }, timeoutMs: AI_TIMEOUT_MS,
-  });
+async function extractWorkoutFromPdf(fileUri: string): Promise<Omit<WorkoutPlan, 'id'>[]> {
+  const { plans } = await uploadForExtraction<{ plans: Omit<WorkoutPlan, 'id'>[] }>('/api/extract-workout/file', fileUri, 'application/pdf');
   return plans;
 }
 async function extractWorkoutFromImage(imageBase64: string, mimeType: string): Promise<Omit<WorkoutPlan, 'id'>[]> {
