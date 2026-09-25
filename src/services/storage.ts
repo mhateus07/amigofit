@@ -180,34 +180,71 @@ async function checkInMeal(mealId: string, date: string, status: 'done' | 'skipp
   await apiRequest('/api/meal-plan/checkins', { method: 'POST', body: { mealId, date, status } });
 }
 // PDF grande (fichas de apps de personal chegam a 75 MB): envia em partes
-// de 2 MB — o proxy do servidor corta requisições que levam mais de 60s.
-// onProgress recebe de 0 a 1.
-const CHUNK_BYTES = 2 * 1024 * 1024;
+// pequenas de binário puro. O proxy do servidor corta requisições que levam
+// mais de 60s, e a internet de casa pode subir a menos de 100 KB/s — partes
+// de 512 KB levam poucos segundos mesmo assim. Cada parte usa a sessão de
+// segundo plano do iOS (continua se o app for minimizado) e é repetida em
+// caso de falha. onProgress recebe de 0 a 1.
+const CHUNK_BYTES = 512 * 1024;
 
 export type UploadProgress = (fraction: number) => void;
+
+async function sendChunk(uploadId: string, index: number, tmpUri: string, token: string | null): Promise<void> {
+  let res: FileSystem.FileSystemUploadResult;
+  try {
+    res = await FileSystem.uploadAsync(`${API_BASE}/api/uploads/${uploadId}/chunks/${index}`, tmpUri, {
+      httpMethod: 'PUT',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    throw new ApiError(0, 'Falha de conexão ao enviar o arquivo.');
+  }
+  if (res.status < 200 || res.status >= 300) {
+    let message = `Erro ${res.status} ao enviar o arquivo.`;
+    try { message = JSON.parse(res.body || '{}').error || message; } catch { /* corpo não-JSON (proxy) */ }
+    throw new ApiError(res.status >= 500 ? 0 : res.status, message);
+  }
+}
 
 async function uploadPdfInChunks(fileUri: string, onProgress?: UploadProgress): Promise<string> {
   const info = await FileSystem.getInfoAsync(fileUri);
   if (!info.exists || !info.size) throw new ApiError(400, 'Não foi possível abrir o arquivo.');
   const size = info.size;
   const { id } = await apiRequest<{ id: string }>('/api/uploads', { method: 'POST', body: { size, mimeType: 'application/pdf' } });
+  const token = await getToken();
+  const tmpUri = `${FileSystem.cacheDirectory}upload-${id}.part`;
   const total = Math.ceil(size / CHUNK_BYTES);
-  for (let index = 0; index < total; index++) {
-    const data = await FileSystem.readAsStringAsync(fileUri, {
-      encoding: FileSystem.EncodingType.Base64,
-      position: index * CHUNK_BYTES,
-      length: Math.min(CHUNK_BYTES, size - index * CHUNK_BYTES),
-    });
-    // Até 3 tentativas por parte (rede do celular oscila); repetir é seguro.
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await apiRequest(`/api/uploads/${id}/chunks/${index}`, { method: 'PUT', body: { data }, timeoutMs: 55_000 });
-        break;
-      } catch (e) {
-        if (attempt >= 3 || !(e instanceof ApiError) || e.status !== 0) throw e;
+  try {
+    for (let index = 0; index < total; index++) {
+      const data = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+        position: index * CHUNK_BYTES,
+        length: Math.min(CHUNK_BYTES, size - index * CHUNK_BYTES),
+      });
+      await FileSystem.writeAsStringAsync(tmpUri, data, { encoding: FileSystem.EncodingType.Base64 });
+      // Até 5 tentativas por parte, com espera crescente; repetir é seguro.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await sendChunk(id, index, tmpUri, token);
+          break;
+        } catch (e) {
+          if (attempt >= 5 || !(e instanceof ApiError) || e.status !== 0) {
+            throw attempt >= 5
+              ? new ApiError(0, `A conexão caiu durante o envio (parte ${index + 1} de ${total}). Confira a internet e tente de novo.`)
+              : e;
+          }
+          await new Promise((r) => setTimeout(r, attempt * 2000));
+        }
       }
+      onProgress?.((index + 1) / total);
     }
-    onProgress?.((index + 1) / total);
+  } finally {
+    FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => {});
   }
   return id;
 }

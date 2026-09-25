@@ -47,15 +47,22 @@ router.post('/', (req, res) => {
   res.json({ id });
 });
 
-// Parte em base64 dentro do JSON. Reenviar uma parte já recebida é aceito
+// Quanto já chegou — para o app retomar um envio interrompido.
+router.get('/:id', (req, res) => {
+  const u = getOwned(req);
+  res.json({ received: u.received, nextIndex: u.nextIndex, size: u.size });
+});
+
+// Parte em binário puro (application/octet-stream) ou, em versões antigas do
+// app, base64 dentro do JSON. Reenviar uma parte já recebida é aceito
 // (idempotente), para o app poder repetir após uma falha de rede.
-router.put('/:id/chunks/:index', async (req, res) => {
+router.put('/:id/chunks/:index', express.raw({ type: 'application/octet-stream', limit: '8mb' }), async (req, res) => {
   const u = getOwned(req);
   const index = parseInt(req.params.index, 10);
   if (!Number.isInteger(index) || index < 0) throw new HttpError(400, 'index inválido');
   if (index < u.nextIndex) return res.json({ received: u.received });
   if (index > u.nextIndex) throw new HttpError(409, `Parte fora de ordem (esperada ${u.nextIndex})`);
-  const data = Buffer.from(String(req.body?.data || ''), 'base64');
+  const data = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body?.data || ''), 'base64');
   if (!data.length || data.length > MAX_CHUNK_BYTES) throw new HttpError(400, 'Parte inválida');
   if (u.received + data.length > u.size) throw new HttpError(400, 'Parte excede o tamanho declarado');
   await fs.promises.appendFile(u.file, data);

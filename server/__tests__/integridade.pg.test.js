@@ -459,8 +459,9 @@ describe('ficha em PDF enviada em partes', () => {
     const { body } = await request(app).post('/api/uploads').set('Authorization', token)
       .send({ size: pdf.length, mimeType: 'application/pdf' }).expect(200);
     for (let i = 0, index = 0; i < pdf.length; i += chunkSize, index++) {
+      // Partes em binário puro, como o app envia.
       await request(app).put(`/api/uploads/${body.id}/chunks/${index}`).set('Authorization', token)
-        .send({ data: pdf.subarray(i, i + chunkSize).toString('base64') }).expect(200);
+        .set('Content-Type', 'application/octet-stream').send(pdf.subarray(i, i + chunkSize)).expect(200);
     }
     return body.id;
   }
@@ -496,6 +497,8 @@ describe('ficha em PDF enviada em partes', () => {
     await request(app).put(`/api/uploads/${body.id}/chunks/1`).set('Authorization', A).send({ data: part }).expect(409);
     await request(app).put(`/api/uploads/${body.id}/chunks/0`).set('Authorization', A).send({ data: part }).expect(200);
     await request(app).put(`/api/uploads/${body.id}/chunks/0`).set('Authorization', A).send({ data: part }).expect(200);
+    const status = await request(app).get(`/api/uploads/${body.id}`).set('Authorization', A).expect(200);
+    expect(status.body).toEqual({ received: 5, nextIndex: 1, size: 10 });
     await request(app).put(`/api/uploads/${body.id}/chunks/1`).set('Authorization', B).send({ data: part }).expect(404);
     // Incompleto: 5 de 10 bytes.
     await request(app).post(`/api/extract-workout/upload/${body.id}`).set('Authorization', A).expect(400);

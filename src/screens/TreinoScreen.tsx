@@ -471,10 +471,14 @@ export default function TreinoScreen() {
         const prefix = files.length > 1 ? `${i + 1}/${files.length} · ` : '';
         setImportProgress(`${prefix}Enviando ${file.name}…`);
         try {
+          const startedAt = Date.now();
           const plans = await storage.extractWorkoutFromPdf(file.uri, (fraction) => {
-            setImportProgress(fraction < 1
-              ? `${prefix}Enviando ${file.name}… ${Math.round(fraction * 100)}%`
-              : `${prefix}Lendo ${file.name}…`);
+            if (fraction >= 1) { setImportProgress(`${prefix}Lendo ${file.name}…`); return; }
+            // Tempo restante estimado pela velocidade até aqui.
+            const elapsed = (Date.now() - startedAt) / 1000;
+            const remaining = fraction > 0.02 ? Math.round((elapsed / fraction) * (1 - fraction)) : null;
+            const eta = remaining === null ? '' : remaining < 60 ? ` · ~${remaining}s` : ` · ~${Math.ceil(remaining / 60)} min`;
+            setImportProgress(`${prefix}Enviando ${file.name}… ${Math.round(fraction * 100)}%${eta}`);
           });
           // Nome do arquivo ("Treino B.pdf") quando a IA não achou um nome no PDF.
           const fileLabel = file.name.replace(/\.pdf$/i, '').trim();
