@@ -72,7 +72,7 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 9 | Zero testes automatizados | todo o repo | Em andamento (Fase 2) |
 | 10 | Insights são heurísticas, não IA real | `InsightsScreen.tsx` | Pendente (Fase 3) |
 | 11 | Chat sem streaming | `ai.ts` / backend | Pendente, não bloqueante |
-| 12 | Logs do backend não registram status HTTP | `server/index.js` | ✅ Corrigido na Fase 7 (log de acesso com status e latência) — falta deploy |
+| 12 | Logs do backend não registram status HTTP | `server/index.js` | ✅ Corrigido na Fase 7 (log de acesso com status e latência), deployado 2026-09-25 |
 | 13 | `expo-file-system` com API removida — "compartilhar relatório semanal" quebrado | `InsightsScreen.tsx` | Pendente (Fase 3) |
 | 14 | Backend em HTTP puro, sem TLS (chaves de API de IA trafegando sem criptografia) | VPS de produção | ✅ Corrigido em 2026-07-17 — HTTPS via Traefik/EasyPanel + Let's Encrypt (`amigofit-api.impulsiodigital.com`), porta 3001 HTTP fechada |
 | 15 | Deploy manual multi-passo via SSH, sem script | VPS de produção | ✅ Corrigido em 2026-07-17 — `scripts/deploy.sh` |
@@ -85,11 +85,11 @@ O celular físico (S24) só entra para validação final, ao fechar um conjunto 
 | 22 | Splash nativa aparece pequena/centralizada em vez de tela cheia, desde a migração pro plugin `expo-splash-screen` (SDK 57) | `app.json` (config do plugin `expo-splash-screen`) | Pendente — cosmético, não bloqueia uso; app abre e funciona normal |
 | 23 | `Simulator.app` ausente/quebrado na instalação do Xcode do usuário — bloqueia teste via simulador (só o teste em iPhone físico funciona hoje) | Xcode.app local (fora do repo) | Pendente — precisa reinstalar/reparar o Xcode; ver decisão 2026-09-15 |
 
-| 24 | Salvar plano de dieta/treino apagava todo o histórico de check-ins (DELETE + ON DELETE CASCADE) | `server/routes/plans.js` | ✅ Corrigido na Fase 7 — falta deploy |
-| 25 | Mensagens/check-ins aceitavam IDs de outra conta | `server/routes/*` | ✅ Corrigido na Fase 7 — falta deploy |
+| 24 | Salvar plano de dieta/treino apagava todo o histórico de check-ins (DELETE + ON DELETE CASCADE) | `server/routes/plans.js` | ✅ Corrigido na Fase 7, deployado 2026-09-25 |
+| 25 | Mensagens/check-ins aceitavam IDs de outra conta | `server/routes/*` | ✅ Corrigido na Fase 7, deployado 2026-09-25 |
 | 26 | Falhas de gravação escondidas no app (sem `res.ok`, `catch {}`) | `src/services/storage.ts` | ✅ Corrigido na Fase 7 — falta build no iPhone |
-| 27 | Chaves de IA em texto puro dentro de `profiles.data` (e nos backups) — contradizia "chave nunca armazenada no servidor" | `server/index.js` | ✅ Corrigido na Fase 7 (criptografadas em `ai_keys`) — falta deploy com `AI_KEYS_SECRET` |
-| 28 | Backup só existe na própria VPS | `scripts/backup-db.sh` | Pendente — script pronto, falta escolher destino externo (rclone) |
+| 27 | Chaves de IA em texto puro dentro de `profiles.data` (e nos backups) — contradizia "chave nunca armazenada no servidor" | `server/index.js` | ✅ Corrigido na Fase 7 (criptografadas em `ai_keys`), deployado 2026-09-25 |
+| 28 | Backup só existe na própria VPS | `scripts/backup-db.sh` | ✅ Corrigido em 2026-09-25 — cópia diária no Google Drive (`gdrive:amigofit-backups`) |
 ---
 
 ## 3. Fases
@@ -123,8 +123,8 @@ Como fazer, passo a passo:
 
 Não avance para a Fase 3 sem reler essas notas — evita redescobrir os mesmos gotchas do zero.
 
-### 🟨 Fase 7 — Confiabilidade e proteção dos dados — implementada 2026-09-25, falta deploy e validação no iPhone
-Origem: análise do código colada pelo usuário em 2026-09-24 (achados de perda de histórico, isolamento entre contas e falhas silenciosas). Prioridade acima das Fases 3/4/5, que ficam pausadas até fechar esta. Branch `fase-7-confiabilidade`. Código pronto, **128 testes passando (31 contra PostgreSQL 16 real)**, TypeScript sem erros, bundle iOS compilando — mas **ainda não deployado nem testado no iPhone**.
+### 🟨 Fase 7 — Confiabilidade e proteção dos dados — deployada 2026-09-25, falta validação no iPhone
+Origem: análise do código colada pelo usuário em 2026-09-24 (achados de perda de histórico, isolamento entre contas e falhas silenciosas). Prioridade acima das Fases 3/4/5, que ficam pausadas até fechar esta. Branch `fase-7-confiabilidade`. Código pronto, **128 testes passando (31 contra PostgreSQL 16 real)**, TypeScript sem erros. **Deployado em produção em 2026-09-25** (4 migrações aplicadas, chave em texto puro migrada para `ai_keys`) e build Release instalada no iPhone — falta o usuário validar os fluxos.
 
 Correções prioritárias (na ordem de gravidade):
 - [x] Editar dieta/treino não apaga mais os check-ins: planos são atualizados e arquivados (`active=false`) em vez de apagados; FK sem cascade. *(Produção tinha 5 refeições e 0 check-ins em 2026-09-25 — coerente com o bug ter apagado o histórico.)*
@@ -167,9 +167,10 @@ Melhorias de produto:
 - [x] Insights priorizam adesão/evolução (prompt + "Treinos 7d / meta" no lugar do total de registros)
 - [ ] Recuperação de senha por e-mail — **bloqueado**: precisa escolher um provedor de e-mail (SMTP/Resend/SES)
 - [ ] Onboarding sem chave própria (IA integrada ao produto) — **decisão de negócio**: quem paga o uso da IA
-- [ ] Deploy em produção: merge em `main`, gerar `AI_KEYS_SECRET` no `.env` da VPS (e guardar cópia fora dela), `./scripts/deploy.sh`
-- [ ] Configurar destino externo de backup (instalar rclone na VPS + `BACKUP_REMOTE`) e rodar `scripts/test-restore.sh`
-- [ ] Nova build Release no iPhone e validação dos fluxos (ver roteiro no DEVLOG, entrada de 2026-09-25)
+- [x] Deploy em produção — 2026-09-25: merge em `main`, `AI_KEYS_SECRET` gerado no `.env` da VPS (cópia fora dela em `~/.amigofit/AI_KEYS_SECRET` no Mac do usuário), `./scripts/deploy.sh` com backup antes e `/health` ok
+- [x] Backup externo no **Google Drive** — 2026-09-25: rclone na VPS (remote `gdrive`, escopo `drive.file`), `BACKUP_REMOTE=gdrive:amigofit-backups`, cron diário 03:00 já envia; `scripts/test-restore.sh` restaurou com sucesso. Sem retenção no Drive (arquivos pequenos; limpar manualmente se crescer)
+- [x] Nova build Release instalada no iPhone — 2026-09-25
+- [ ] Validação dos fluxos no iPhone pelo usuário (roteiro no DEVLOG, entrada de 2026-09-25)
 
 ### ⬜ Fase 3 — Produto (Chat / Insights)
 - [x] Corrigir `InsightsScreen.tsx`: substituir API removida do `expo-file-system` (`cacheDirectory`/`EncodingType`) para destravar "compartilhar relatório semanal" — **corrigido e confirmado em 2026-08-22** (troca de `import * as FileSystem from 'expo-file-system'` para `'expo-file-system/legacy'`, mesmo padrão já usado em `DietaScreen.tsx`). Testado via Expo Go/túnel no iPhone: compartilhamento do relatório semanal funcionando.
